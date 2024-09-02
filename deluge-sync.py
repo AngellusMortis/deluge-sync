@@ -1,10 +1,11 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import requests
 import json
 import time
 import sys
-import subprocess
+import re
+import getopt
 import configparser
 
 parser = configparser.ConfigParser()
@@ -14,13 +15,18 @@ config = parser['main']
 password = config['password']
 url = config['url']
 remote_path = config['remote_path']
-remote_user = config['remote_user']
-remote_host = config['remote_host']
-local_path = config['local_path']
+
+output = True
+remove_list = []
 headers = {'Content-type': 'application/json', 'Accept': 'text/plain'}
 
+def Output(msg):
+    global output
+    if output:
+        print(msg)
+
 def logError(msg):
-    print("Error: "+msg)
+    Output("Error: "+msg)
     sys.exit(1)
 
 def get_login_cookie():
@@ -30,17 +36,28 @@ def get_login_cookie():
 
     if '_session_id' in j:
         returnmsg = j['_session_id']
+        Output( "Logging In" )
     else:
         logError("Bad Password!")
     return returnmsg
 
 def remove_torrent(id):
     data = {"method":"core.remove_torrent","params":[id,"true"],"id":"2030"}
-    r = requests.post(url, data=json.dumps(data), headers=headers)
+    r = ""
+    Output( "\t\tAttempting to remove " + id )
+    try:
+        r = requests.post(url, data=json.dumps(data), headers=headers, timeout=5)
+        r.raise_for_status()
+        Output( "\t\tRemoved torrent " + id )
+        remove_list.remove( id )
+    except requests.exceptions.RequestException as error:
+        Output('\t\t *** Failed to remove Item ***')
+        Output(error)
+    Output("")
     return r
 
 def move_torrent(id):
-    data = {"method":"core.move_storage","params":[[id],remote_path+"Seeding/"],"id":"112"}
+    data = {"method":"core.move_storage","params":[[id],remote_path],"id":"112"}
     r = requests.post(url, data=json.dumps(data), headers=headers)
     return r
 
@@ -49,30 +66,36 @@ def change_label_torrent(id,label):
     r = requests.post(url, data=json.dumps(data), headers=headers)
     return r
 
-def sync_torrent(torrent):
-    id = torrent[0]
-    name = torrent[1]
-    label   = torrent[2]
-    path = remote_user+"@"+remote_host+":\""+remote_path+label+"/"+name+"\""
-
-    print path
-    proc = subprocess.Popen(["rsync", "--exclude=\".*\"", "-PrtDhv","--perms", "--chmod", "755", path, local_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    pout,perr = proc.communicate()
-    if not perr:
-        print pout
-        change_label_torrent(id,'seeding')
-        move_torrent(id)
-
-    r = ""
-    return r
+# I have no idea what I was doing here, but it's on my version in GitHub...
+#def sync_torrent(torrent):
+#    id = torrent[0]
+#    name = torrent[1]
+#    label   = torrent[2]
+#    path = remote_user+"@"+remote_host+":\""+remote_path+label+"/"+name+"\""
+#
+#    print path
+#    proc = subprocess.Popen(["rsync", "--exclude=\".*\"", "-PrtDhv","--perms", "--chmod", "755", path, local_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+#    pout,perr = proc.communicate()
+#    if not perr:
+#        print pout
+#        change_label_torrent(id,'seeding')
+#        move_torrent(id)
+#
+#    r = ""
+#    return r
 
 def get_torrents():
-    data = {"method":"web.update_ui","params":[["name","total_wanted","state","time_added","tracker_host","seeding_time","label"],{"state":"Seeding","label":"radarr-new"}],"id":22}
+    Output( "\tGetting List of Torrents" )
+    data = {"method":"web.update_ui","params":[["name","total_wanted","state","time_added","tracker_host","seeding_time","label"],{"state":"Seeding"}],"id":22}
     r = requests.post(url, data=json.dumps(data), headers=headers)
     j = r.json()
     result = j['result']
     if result is not None:
-        returnmsg = result['torrents']
+        if result['connected'] is not False:
+            returnmsg = result['torrents']
+            Output( "\tTorrent List Gathered" )
+        else:
+            logError( "Not Connected" )
     else:
         if 'error' in j:
             logError(j['error']['message'])
@@ -90,25 +113,64 @@ def get_torrents_Error():
             logError(j['error']['message'])
     return returnmsg
 
+def usage():
+    Output( '-h / --help Displays this page' )
+    Output( '-q / --quiet will surpress output' )
 
-headers['Cookie'] = '_session_id='+get_login_cookie()
+def main():
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], "h:q", ["help", "quiet="])
+    except getopt.GetoptError as err:
+        # print help information and exit:
+        print(err)  # will print something like "option -a not recognized"
+        usage()
+        sys.exit(2)
 
-sync_list = []
+    for o, a in opts:
+        if o in ("-h", "--help"):
+            usage()
+            sys.exit()
+        elif o in ("-q", "--quiet"):
+            output = False
+        else:
+            assert False, "unhandled option"
 
-torrents = get_torrents()
 
-for tid, torrent in torrents.items():
-    name = torrent['name']
-    state = torrent['state']
-    tracker_host = torrent['tracker_host']
-    time_added = torrent['time_added']
-    total_wanted = torrent['total_wanted']
-    seeding_time = torrent['seeding_time']
-    label = torrent['label']
 
-    if seeding_time > 60:
-        sync_list.append( [tid,name,label] )
+    headers['Cookie'] = '_session_id='+get_login_cookie()
 
-if len(sync_list) > 0:
-    for torrentid in sync_list:
-        r = sync_torrent(torrentid)
+    torrents = get_torrents()
+
+    for tid, torrent in torrents.items():
+        name = torrent['name']
+        state = torrent['state']
+        tracker_host = torrent['tracker_host']
+        time_added = torrent['time_added']
+        total_wanted = torrent['total_wanted']
+        seeding_time = torrent['seeding_time']
+
+        if (tracker_host == "landof.tv"):
+    #        if seeding_time > 2678400:
+            regexp = re.compile(r'(?i)S[0-9][0-9]E[0-9][0-9]')
+            if regexp.search(name):
+                if seeding_time > 93600:
+                    remove_list.append( tid )
+            if seeding_time > 475200:
+    #        if seeding_time > 1123200:
+                remove_list.append( tid )
+
+        if (tracker_host == "torrentbytes.net"):
+            if seeding_time > 259200:
+                remove_list.append( tid )
+
+        if (tracker_host != "landof.tv") and (tracker_host != "torrentbytes.net"):
+            if seeding_time > 5400:
+                remove_list.append( tid )
+
+    if len(remove_list) > 0:
+        for torrentid in reversed(remove_list):
+            r = remove_torrent(torrentid)
+            time.sleep(1)
+
+if __name__ == "__main__":
+    main()
