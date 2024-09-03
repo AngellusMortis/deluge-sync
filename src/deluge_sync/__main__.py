@@ -17,7 +17,7 @@ def _main() -> None:
             load_dotenv(dotenv_path=env_file)
         else:
             load_dotenv()
-    app()
+    app.meta()
 
 
 if __name__ == "__main__":

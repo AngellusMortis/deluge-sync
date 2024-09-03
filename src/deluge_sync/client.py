@@ -86,10 +86,15 @@ class DelugeClient:
         response.raise_for_status()
 
     def get_torrents(
-        self, *, state: State | None = None, label: str | None = None
+        self,
+        *,
+        state: State | None = None,
+        labels: list[str] | None = None,
+        exclude_labels: list[str] | None = None,
     ) -> dict[str, Torrent]:
         """Get list of torrent from Deluge."""
 
+        excluded = set(exclude_labels) if exclude_labels else set()
         fields = [
             "name",
             "total_wanted",
@@ -99,11 +104,11 @@ class DelugeClient:
             "seeding_time",
             "label",
         ]
-        query = {}
+        query: dict[str, str | list[str]] = {}
         if state:
             query["state"] = state.value
-        if label:
-            query["label"] = label
+        if labels:
+            query["label"] = labels
 
         data = {
             "method": "web.update_ui",
@@ -127,6 +132,8 @@ class DelugeClient:
         return_data = {}
         torrent_data = result.get("torrents", {})
         for key, values in torrent_data.items():
+            if values["label"] in excluded:
+                continue
             return_data[key] = Torrent(id=key, **values)
 
         return return_data
@@ -153,7 +160,7 @@ class DelugeClient:
         response = self.session.post(self.json_api, json=data)
         response.raise_for_status()
 
-    def change_label_toreent(self, torrent_id: str, label: str) -> None:
+    def change_label_torrent(self, torrent_id: str, label: str) -> None:
         """Change label on torrent."""
 
         data = {

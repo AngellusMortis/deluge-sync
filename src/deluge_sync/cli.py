@@ -1,12 +1,14 @@
 """Deluge Sync CLI."""
 
 import re
+import sys
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Annotated
 
-from cyclopts import App, Parameter
+from cyclopts import App, CycloptsError, Parameter
 from rich.console import Console
+from rich.table import Table
 
 from deluge_sync.client import DelugeClient, State, Torrent
 
@@ -36,11 +38,18 @@ PARAM_PASSWORD = Annotated[
         env_var="DELUGE_SYNC_PASSWORD",
     ),
 ]
-PARAM_SEED_LABEL = Annotated[
-    str | None,
+PARAM_LABELS = Annotated[
+    list[str] | None,
     Parameter(
-        ("-l", "--seed-label"),
-        env_var="DELUGE_SYNC_SEED_LABEL",
+        ("-l", "--label"),
+        env_var="DELUGE_SYNC_LABELS",
+    ),
+]
+PARAM_EXCLUDE_LABELS = Annotated[
+    list[str] | None,
+    Parameter(
+        ("-e", "--exclude-label"),
+        env_var="DELUGE_SYNC_EXCLUDE_LABELS",
     ),
 ]
 
@@ -61,6 +70,34 @@ class TrackerRule:
     priority: int
     min_time: timedelta
     name_search: re.Pattern[str] | None = None
+
+
+@dataclass
+class Context:
+    """CLI Context."""
+
+    client: DelugeClient
+    quiet: bool
+
+
+@dataclass
+class _State:
+    """CLI state."""
+
+    context: Context | None = None
+
+
+_STATE = _State()
+NO_CONTEXT_ERROR = "No CLI context"
+
+
+def get_context() -> Context:
+    """Get CLI Context."""
+
+    if _STATE.context is None:
+        raise CycloptsError(msg=NO_CONTEXT_ERROR)
+
+    return _STATE.context
 
 
 RULES = [
@@ -134,14 +171,120 @@ def _check_torrent(
     return False
 
 
-@app.default()
-def main(  # noqa: PLR0913
-    *,
+@app.meta.default
+def main(
+    *tokens: Annotated[str, Parameter(show=False, allow_leading_hyphen=True)],
     deluge_url: PARAM_URL,
     deluge_password: PARAM_PASSWORD,
-    seed_label: PARAM_SEED_LABEL = None,
-    default_seed_time: PARAM_DEFAULT_SEED = timedelta(minutes=90),
     quiet: FLAG_QUIET = False,
+) -> None:
+    """
+    Deluge entrypoint.
+
+    Parameters
+    ----------
+    tokens: str
+        CLI args.
+
+    deluge_url: str
+        Deluge Web base URL.
+
+    deluge_password: str
+        Deluge Web password.
+
+    quiet: bool
+        Surpress all output.
+
+    """
+
+    client = DelugeClient(host=deluge_url, password=deluge_password)
+    console = Console()
+
+    try:
+        if not quiet:
+            console.print(f"Logging in to deluge ({deluge_url} )")
+        client.auth()
+    except Exception:  # noqa: BLE001
+        client.close()
+        console.print_exception()
+        sys.exit(1)
+
+    _STATE.context = Context(client=client, quiet=quiet)
+    try:
+        sys.exit(app(tokens))
+    finally:
+        client.close()
+
+
+@app.command()
+def query(
+    *,
+    labels: PARAM_LABELS = None,
+    exclude_labels: PARAM_EXCLUDE_LABELS = None,
+) -> int:
+    """
+    Deluge List Torrents.
+
+    Parameters
+    ----------
+    labels: list[str]
+        labels for filtering.
+
+    exclude_labels: list[str]
+        labels for filtering.
+
+    """
+
+    ctx = get_context()
+
+    console = Console()
+
+    if not ctx.quiet:
+        extra = ""
+        if labels:
+            extra = f" (label={','.join(labels)})"
+        console.print(f"Getting list of seeding torrents{extra}...")
+
+    torrents = ctx.client.get_torrents(
+        state=State.SEEDING, labels=labels, exclude_labels=exclude_labels
+    )
+    if not torrents:
+        console.print("No torrents found")
+        return 1
+
+    table = Table(title="Torrents", row_styles=["dim", ""])
+    table.add_column("ID")
+    table.add_column("Name", style="cyan")
+    table.add_column("State")
+    table.add_column("Label", style="green")
+    table.add_column("Tracker", style="yellow")
+    table.add_column("Added")
+    table.add_column("Wanted")
+    table.add_column("Seeding Time")
+
+    for torrent in torrents.values():
+        table.add_row(
+            torrent.id,
+            torrent.name,
+            torrent.state,
+            torrent.label,
+            torrent.tracker_host,
+            torrent.time_added.isoformat(),
+            str(torrent.total_wanted),
+            str(torrent.seeding_time),
+        )
+
+    console.print(table)
+
+    return 0
+
+
+@app.command()
+def sync(
+    *,
+    labels: PARAM_LABELS = None,
+    exclude_labels: PARAM_EXCLUDE_LABELS = None,
+    default_seed_time: PARAM_DEFAULT_SEED = timedelta(minutes=90),
     dry_run: FLAG_DRY = False,
 ) -> int:
     """
@@ -149,67 +292,52 @@ def main(  # noqa: PLR0913
 
     Parameters
     ----------
-    deluge_url: str
-        Deluge Web base URL.
-
-    deluge_password: str
-        Deluge Web password.
-
-    seed_label: str
+    labels: list[str]
         Seeding label for filtering.
+
+    exclude_labels: list[str]
+        labels for filtering.
 
     default_seed_time: timedelta
         Default seedtime for torrents without rules.
-
-    quiet: bool
-        Surpress all output.
 
     dry_run: bool
         Do not actually delete any torrents.
 
     """
 
-    client = DelugeClient(host=deluge_url, password=deluge_password)
-    console = Console()
+    ctx = get_context()
 
+    console = Console()
     rules = _compile_rules()
 
-    try:
-        if not quiet:
-            console.print(f"Logging in to deluge ({deluge_url} )")
-        client.auth()
+    if not ctx.quiet:
+        extra = ""
+        if labels:
+            extra = f" (label={','.join(labels)})"
+        console.print(f"Getting list of seeding torrents{extra}...")
 
-        if not quiet:
+    torrents = ctx.client.get_torrents(
+        state=State.SEEDING, labels=labels, exclude_labels=exclude_labels
+    )
+    to_remove = [
+        t.id
+        for t in torrents.values()
+        if _check_torrent(t, rules.get(t.tracker_host, []), default_seed_time)
+    ]
+
+    if not ctx.quiet:
+        console.print(f"Torrents to delete: {len(to_remove)}")
+    for tid in to_remove:
+        if not ctx.quiet:
             extra = ""
-            if seed_label:
-                extra = f" (label={seed_label})"
-            console.print(f"Getting list of seeding torrents{extra}...")
+            if dry_run:
+                extra = " (dry)"
+            console.print(f"\tRemoving torrent{extra}: {torrents[tid]}")
+        try:
+            if not dry_run:
+                ctx.client.remove_torrent(tid)
+        except Exception:  # noqa: BLE001
+            console.print("[red]Failed to remove torrent[/red]")
 
-        torrents = client.get_torrents(state=State.SEEDING, label=seed_label)
-
-        to_remove = [
-            t.id
-            for t in torrents.values()
-            if _check_torrent(t, rules.get(t.tracker_host, []), default_seed_time)
-        ]
-
-        if not quiet:
-            console.print(f"Torrents to delete: {len(to_remove)}")
-        for tid in to_remove:
-            if not quiet:
-                extra = ""
-                if dry_run:
-                    extra = " (dry)"
-                console.print(f"Removing torrent{extra}: {torrents[tid]}")
-            try:
-                if not dry_run:
-                    client.remove_torrent(tid)
-            except Exception:  # noqa: BLE001
-                console.print("[red]Failed to remove torrent[/red]")
-    except Exception:  # noqa: BLE001
-        client.close()
-        console.print_exception()
-        return 1
-
-    client.close()
     return 0
