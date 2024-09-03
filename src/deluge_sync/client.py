@@ -40,6 +40,8 @@ class Torrent(BaseModel):
     seeding_time: timedelta
 
     def __str__(self) -> str:
+        """Torrent str."""
+
         return f"{self.name} - {self.state} - {self.label} - {self.tracker_host}"
 
 

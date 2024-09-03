@@ -60,7 +60,7 @@ class TrackerRule:
     host: str
     priority: int
     min_time: timedelta
-    name_search: re.Pattern | None = None
+    name_search: re.Pattern[str] | None = None
 
 
 RULES = [
@@ -104,7 +104,7 @@ RULES = [
 
 
 def _compile_rules() -> dict[str, list[TrackerRule]]:
-    rules = {}
+    rules: dict[str, list[TrackerRule]] = {}
     for rule in RULES:
         tracker_rules = rules.get(rule.host, [])
         tracker_rules.append(rule)
@@ -135,7 +135,7 @@ def _check_torrent(
 
 
 @app.default()
-def main(
+def main(  # noqa: PLR0913
     *,
     deluge_url: PARAM_URL,
     deluge_password: PARAM_PASSWORD,
@@ -158,11 +158,14 @@ def main(
     seed_label: str
         Seeding label for filtering.
 
+    default_seed_time: timedelta
+        Default seedtime for torrents without rules.
+
     quiet: bool
         Surpress all output.
 
-    default_seed_time: timedelta
-        Default seedtime for torrents without rules.
+    dry_run: bool
+        Do not actually delete any torrents.
 
     """
 
