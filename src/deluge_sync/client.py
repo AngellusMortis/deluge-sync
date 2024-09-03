@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
+from pathlib import Path
 from urllib.parse import urljoin
 
 import httpx
@@ -31,13 +32,16 @@ class Torrent(BaseModel):
     """Torrent model."""
 
     id: str
-    total_wanted: int
     tracker_host: str
     time_added: datetime
     state: State
     name: str
     label: str
     seeding_time: timedelta
+    download_location: Path
+    progress: float
+    total_done: int
+    total_wanted: int
 
     def __str__(self) -> str:
         """Torrent str."""
@@ -97,12 +101,15 @@ class DelugeClient:
         excluded = set(exclude_labels) if exclude_labels else set()
         fields = [
             "name",
-            "total_wanted",
             "state",
             "time_added",
             "tracker_host",
             "seeding_time",
             "label",
+            "download_location",
+            "progress",
+            "total_done",
+            "total_wanted",
         ]
         query: dict[str, str | list[str]] = {}
         if state:

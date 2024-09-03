@@ -4,6 +4,7 @@ import re
 import sys
 from dataclasses import dataclass
 from datetime import timedelta
+from pathlib import Path
 from typing import Annotated
 
 from cyclopts import App, CycloptsError, Parameter
@@ -11,6 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from deluge_sync.client import DelugeClient, State, Torrent
+from deluge_sync.utils import sizeof_fmt
 
 app = App(
     help="""
@@ -58,6 +60,14 @@ PARAM_DEFAULT_SEED = Annotated[
     Parameter(
         ("-t", "--seed-time"),
         env_var="DELUGE_SYNC_SEED_TIME",
+    ),
+]
+
+PARAM_PATH_MAP = Annotated[
+    list[str] | None,
+    Parameter(
+        ("-m", "--path-map"),
+        env_var="DELUGE_SYNC_PATH_MAP",
     ),
 ]
 
@@ -239,12 +249,10 @@ def query(
 
     console = Console()
 
-    if not ctx.quiet:
-        extra = ""
-        if labels:
-            extra = f" (label={','.join(labels)})"
-        console.print(f"Getting list of seeding torrents{extra}...")
-
+    extra = ""
+    if labels:
+        extra = f" (label={','.join(labels)})"
+    _print(console, f"Getting list of seeding torrents{extra}...", quiet=ctx.quiet)
     torrents = ctx.client.get_torrents(
         state=State.SEEDING, labels=labels, exclude_labels=exclude_labels
     )
@@ -252,31 +260,60 @@ def query(
         console.print("No torrents found")
         return 1
 
-    table = Table(title="Torrents", row_styles=["dim", ""])
+    table = Table(title="Torrents", row_styles=["", "dim"])
     table.add_column("ID")
     table.add_column("Name", style="cyan")
     table.add_column("State")
+    table.add_column("Progress")
     table.add_column("Label", style="green")
     table.add_column("Tracker", style="yellow")
     table.add_column("Added")
-    table.add_column("Wanted")
     table.add_column("Seeding Time")
+    table.add_column("Path")
 
     for torrent in torrents.values():
+        done = sizeof_fmt(torrent.total_done)
+        wanted = sizeof_fmt(torrent.total_wanted)
+
         table.add_row(
             torrent.id,
             torrent.name,
             torrent.state,
+            f"{done} / {wanted} {torrent.progress:.0f}%",
             torrent.label,
             torrent.tracker_host,
             torrent.time_added.isoformat(),
-            str(torrent.total_wanted),
             str(torrent.seeding_time),
+            str(torrent.download_location),
         )
 
     console.print(table)
 
     return 0
+
+
+def _convert_to_dict(path_list: list[str]) -> dict[str, Path]:
+    if len(path_list) == 1:
+        path_list = path_list[0].split(",")
+
+    path_map = {}
+    for item in path_list:
+        key, value = item.split("=")
+        path_map[key] = Path(value)
+
+    return path_map
+
+
+def _print(console: Console, msg: str, *, quiet: bool, dry_run: bool = False) -> None:
+    if quiet:
+        return
+
+    dry = ""
+    if dry_run:
+        dry = " (dry)"
+    msg = msg.format(dry=dry)
+
+    console.print(msg)
 
 
 @app.command()
@@ -285,6 +322,7 @@ def sync(
     labels: PARAM_LABELS = None,
     exclude_labels: PARAM_EXCLUDE_LABELS = None,
     default_seed_time: PARAM_DEFAULT_SEED = timedelta(minutes=90),
+    path_list: PARAM_PATH_MAP = None,
     dry_run: FLAG_DRY = False,
 ) -> int:
     """
@@ -301,39 +339,55 @@ def sync(
     default_seed_time: timedelta
         Default seedtime for torrents without rules.
 
+    path_list: list[str]
+        Map of tracker (key) to download folder (value). Will move to path.
+
     dry_run: bool
         Do not actually delete any torrents.
 
     """
 
+    path_map = _convert_to_dict(path_list or [])
     ctx = get_context()
 
     console = Console()
     rules = _compile_rules()
 
-    if not ctx.quiet:
-        extra = ""
-        if labels:
-            extra = f" (label={','.join(labels)})"
-        console.print(f"Getting list of seeding torrents{extra}...")
-
+    extra = ""
+    if labels:
+        extra = f" (label={','.join(labels)})"
+    _print(console, f"Getting list of seeding torrents{extra}...", quiet=ctx.quiet)
     torrents = ctx.client.get_torrents(
         state=State.SEEDING, labels=labels, exclude_labels=exclude_labels
     )
-    to_remove = [
-        t.id
-        for t in torrents.values()
-        if _check_torrent(t, rules.get(t.tracker_host, []), default_seed_time)
-    ]
+    to_remove = []
+    for torrent in torrents.values():
+        if _check_torrent(
+            torrent, rules.get(torrent.tracker_host, []), default_seed_time
+        ):
+            to_remove.append(torrent.id)
+            continue
 
-    if not ctx.quiet:
-        console.print(f"Torrents to delete: {len(to_remove)}")
+        expected_path = path_map.get(torrent.tracker_host)
+        if expected_path and torrent.download_location != expected_path:
+            _print(
+                console,
+                f"\tMoving torrent{{dry}}: {torrent}",
+                quiet=ctx.quiet,
+                dry_run=dry_run,
+            )
+            if not dry_run:
+                ctx.client.move_torrent(torrent.id, str(expected_path))
+
+    _print(console, f"Torrents to delete: {len(to_remove)}", quiet=ctx.quiet)
     for tid in to_remove:
-        if not ctx.quiet:
-            extra = ""
-            if dry_run:
-                extra = " (dry)"
-            console.print(f"\tRemoving torrent{extra}: {torrents[tid]}")
+        _print(
+            console,
+            f"\tRemoving torrent{{dry}}: {torrents[tid]}",
+            quiet=ctx.quiet,
+            dry_run=dry_run,
+        )
+
         try:
             if not dry_run:
                 ctx.client.remove_torrent(tid)
