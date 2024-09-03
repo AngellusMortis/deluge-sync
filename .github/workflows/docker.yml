@@ -94,6 +94,6 @@ jobs:
           push: true
           build-args: |
             PACKAGE_VERSION=${{ env.PACKAGE_VERSION }}
-          cache-from: ghcr.io/$GHCR_REPO/deluge-sync:buildcache
-          cache-to: type=registry,ref=ghcr.io/$GHCR_REPO/deluge-sync:buildcache,mode=max
+          cache-from: ghcr.io/${{ env.GHCR_REPO }}/deluge-sync:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ env.GHCR_REPO}}/deluge-sync:buildcache,mode=max
           tags: ${{ env.DOCKER_TAGS }}
