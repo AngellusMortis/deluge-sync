@@ -54,7 +54,7 @@ jobs:
 
           echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> $GITHUB_ENV
           echo "GHCR_REPO=$GHCR_REPO" >> $GITHUB_ENV
-          echo "DOCKER_TAGS=ghcr.io/$GHCR_REPO/deluge-sync:dev,ghcr.io/$GHCR_REPO/deluge-sync:$PACKAGE_VERSION" >> $GITHUB_ENV
+          echo "DOCKER_TAGS=ghcr.io/$GHCR_REPO:dev,ghcr.io/$GHCR_REPO:$PACKAGE_VERSION" >> $GITHUB_ENV
 
       - name: Get current version (no rebuild)
         if: ${{ inputs.rebuild != 'yes' }}
@@ -64,12 +64,12 @@ jobs:
 
           echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> $GITHUB_ENV
           echo "GHCR_REPO=$GHCR_REPO" >> $GITHUB_ENV
-          echo "DOCKER_TAGS=ghcr.io/$GHCR_REPO/deluge-sync:dev,ghcr.io/$GHCR_REPO/deluge-sync:$(echo $PACKAGE_VERSION | tr "+" -)" >> $GITHUB_ENV
+          echo "DOCKER_TAGS=ghcr.io/$GHCR_REPO:dev,ghcr.io/$GHCR_REPO:$(echo $PACKAGE_VERSION | tr "+" -)" >> $GITHUB_ENV
 
       - name: Add Latest Docker Tag
         run: |
           if [[ ! "$PACKAGE_VERSION" == *"dev"* ]]; then
-            echo "DOCKER_TAGS=ghcr.io/$GHCR_REPO/deluge-sync:latest,$DOCKER_TAGS" >> $GITHUB_ENV
+            echo "DOCKER_TAGS=ghcr.io/$GHCR_REPO:latest,$DOCKER_TAGS" >> $GITHUB_ENV
           fi
 
       - name: Set up QEMU
@@ -94,6 +94,6 @@ jobs:
           push: true
           build-args: |
             PACKAGE_VERSION=${{ env.PACKAGE_VERSION }}
-          cache-from: ghcr.io/${{ env.GHCR_REPO }}/deluge-sync:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ env.GHCR_REPO}}/deluge-sync:buildcache,mode=max
+          cache-from: ghcr.io/${{ env.GHCR_REPO }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ env.GHCR_REPO }}:buildcache,mode=max
           tags: ${{ env.DOCKER_TAGS }}

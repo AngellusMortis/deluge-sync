@@ -140,7 +140,7 @@ def main(  # noqa: PLR0913
     deluge_url: PARAM_URL,
     deluge_password: PARAM_PASSWORD,
     seed_label: PARAM_SEED_LABEL = None,
-    default_seed_time: PARAM_DEFAULT_SEED = timedelta(seconds=5400),
+    default_seed_time: PARAM_DEFAULT_SEED = timedelta(minutes=90),
     quiet: FLAG_QUIET = False,
     dry_run: FLAG_DRY = False,
 ) -> int:
@@ -176,7 +176,7 @@ def main(  # noqa: PLR0913
 
     try:
         if not quiet:
-            console.print("Logging in")
+            console.print(f"Logging in to deluge ({deluge_url} )")
         client.auth()
 
         if not quiet:
@@ -193,6 +193,8 @@ def main(  # noqa: PLR0913
             if _check_torrent(t, rules.get(t.tracker_host, []), default_seed_time)
         ]
 
+        if not quiet:
+            console.print(f"Torrents to delete: {len(to_remove)}")
         for tid in to_remove:
             if not quiet:
                 extra = ""
