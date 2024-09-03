@@ -1,0 +1,117 @@
+[build-system]
+requires = [ "hatchling", "hatch-vcs", "wheel",]
+build-backend = "hatchling.build"
+
+[project]
+name = "deluge-sync"
+description = "Python app to manage Deluge"
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = [ "Private :: Do Not Upload",]
+dynamic = [ "version",]
+dependencies = [
+    "cyclopts",
+    "httpx",
+    "pydantic",
+    "rich",
+]
+
+[[project.authors]]
+name = "Christopher Bailey"
+email = "cbailey@mort.is"
+
+
+[[project.maintainers]]
+name = "Christopher Bailey"
+email = "cbailey@mort.is"
+
+
+[project.license]
+file = "LICENSE"
+
+[project.optional-dependencies]
+dev = [
+    "build",
+    "coverage[toml]",
+    "mypy",
+    "python-dotenv",
+    "ruff",
+    "twine",
+]
+
+[project.scripts]
+deluge-sync = "deluge_sync.__main__:_main"
+
+## build backend metadata
+[tool.hatch]
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src/deluge_sync"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/deluge_sync"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+## linting metadata
+[tool.ruff]
+exclude = ["*migrations*", ".*", "/usr/local/lib", "dist", "venv"]
+line-length = 88
+target-version = "py312"
+
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D202", # perfer emptry string after docstring
+    "D203", # incompatible with D211
+    "D212", # incompatible with D213
+    "COM812", # incompatible ruff format
+    "ISC001", # incompatible ruff format
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+"**/*.py" = []
+"cli.py" = ["T"] # CLI allows print
+"tests/**/*.py" = ["FBT", "D", "SLF001", "PLR2004", "RUF029", "S", "E501"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+disable_error_code = "no-redef"
+exclude = ["dist", "/usr/local/lib", "codeql"]
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_calls = false
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = "qrcode"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "ipywidgets"
+ignore_missing_imports = true
