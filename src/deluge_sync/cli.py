@@ -1,5 +1,7 @@
 """Deluge Sync CLI."""
 
+import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -8,6 +10,7 @@ from pathlib import Path
 from typing import Annotated
 
 from cyclopts import App, CycloptsError, Parameter
+from pydantic import BaseModel
 from rich.console import Console
 from rich.table import Table
 
@@ -72,8 +75,7 @@ PARAM_PATH_MAP = Annotated[
 ]
 
 
-@dataclass
-class TrackerRule:
+class TrackerRule(BaseModel):
     """Tracker rules."""
 
     host: str
@@ -110,7 +112,7 @@ def get_context() -> Context:
     return _STATE.context
 
 
-RULES = [
+DEFAULT_RULES = [
     TrackerRule(
         host="landof.tv",
         priority=1,
@@ -121,11 +123,6 @@ RULES = [
         host="landof.tv",
         priority=10,
         min_time=timedelta(days=5, hours=12),
-    ),
-    TrackerRule(
-        host="torrentbytes.net",
-        priority=10,
-        min_time=timedelta(days=3),
     ),
     TrackerRule(
         host="torrentbytes.net",
@@ -150,17 +147,45 @@ RULES = [
 ]
 
 
-def _compile_rules() -> dict[str, list[TrackerRule]]:
+def _get_default_rules(ctx: Context) -> dict[str, list[TrackerRule]]:
     rules: dict[str, list[TrackerRule]] = {}
-    for rule in RULES:
+
+    console = Console()
+    _print(console, "Loading default rules...", quiet=ctx.quiet)
+    for rule in DEFAULT_RULES:
         tracker_rules = rules.get(rule.host, [])
         tracker_rules.append(rule)
         rules[rule.host] = tracker_rules
+
+    return rules
+
+
+def _get_env_rules(ctx: Context) -> dict[str, list[TrackerRule]] | None:
+    env_rules = os.environ.get("DELUGE_SYNC_RULES")
+    if not env_rules:
+        return None
+
+    console = Console()
+    _print(console, "Loading rules from ENV...", quiet=ctx.quiet)
+    rules: dict[str, list[TrackerRule]] = {}
+    for rule_json in json.loads(env_rules):
+        rule = TrackerRule(**rule_json)
+        tracker_rules = rules.get(rule.host, [])
+        tracker_rules.append(rule)
+        rules[rule.host] = tracker_rules
+
+    return rules
+
+
+def _compile_rules(ctx: Context) -> dict[str, list[TrackerRule]]:
+    rules = _get_env_rules(ctx) or _get_default_rules(ctx)
 
     for host, tracker_rules in rules.items():
         sorted_rules = sorted(tracker_rules, key=lambda r: r.priority)
         rules[host] = sorted_rules
 
+    console = Console()
+    _print(console, f"Loaded rules for {len(rules)} trackers", quiet=ctx.quiet)
     return rules
 
 
@@ -316,6 +341,22 @@ def _print(console: Console, msg: str, *, quiet: bool, dry_run: bool = False) ->
     console.print(msg)
 
 
+def _print_label_text(
+    console: Console, ctx: Context, labels: list[str] | None, exclude: list[str] | None
+) -> None:
+    extra = ""
+    if labels:
+        extra = f"label={','.join(labels)}"
+    if exclude:
+        if extra:
+            extra += ","
+        extra += f"exclude={','.join(exclude)}"
+
+    if extra:
+        extra = f" ({extra})"
+    _print(console, f"Getting list of seeding torrents{extra}...", quiet=ctx.quiet)
+
+
 @app.command()
 def sync(
     *,
@@ -347,16 +388,13 @@ def sync(
 
     """
 
-    path_map = _convert_to_dict(path_list or [])
     ctx = get_context()
-
     console = Console()
-    rules = _compile_rules()
+    rules = _compile_rules(ctx)
+    path_map = _convert_to_dict(path_list or [])
+    _print(console, f"Loaded path maps for {len(path_map)} trackers", quiet=ctx.quiet)
 
-    extra = ""
-    if labels:
-        extra = f" (label={','.join(labels)})"
-    _print(console, f"Getting list of seeding torrents{extra}...", quiet=ctx.quiet)
+    _print_label_text(console, ctx, labels, exclude_labels)
     torrents = ctx.client.get_torrents(
         state=State.SEEDING, labels=labels, exclude_labels=exclude_labels
     )
