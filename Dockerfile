@@ -1,9 +1,9 @@
 FROM python:3.12-slim-bookworm AS base
 
-LABEL org.opencontainers.image.source https://github.com/AngellusMortis/deluge-sync
+LABEL org.opencontainers.image.source=https://github.com/AngellusMortis/deluge-sync
 
-ENV PYTHONUNBUFFERED 1
-ENV UV_SYSTEM_PYTHON true
+ENV PYTHONUNBUFFERED=1
+ENV UV_SYSTEM_PYTHON=true
 ARG TARGETPLATFORM
 
 RUN addgroup --system --gid 1000 app \
@@ -43,7 +43,7 @@ WORKDIR /data
 ENTRYPOINT ["/usr/local/bin/entrypoint"]
 
 
-FROM builder as builder-dev
+FROM builder AS builder-dev
 
 COPY dev-requirements.txt /
 RUN --mount=type=cache,mode=0755,id=pip-$TARGETPLATFORM,target=/root/.cache \
@@ -54,9 +54,9 @@ RUN --mount=type=cache,mode=0755,id=pip-$TARGETPLATFORM,target=/root/.cache \
 FROM base AS dev
 
 # Python will not automatically write .pyc files
-ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONDONTWRITEBYTECODE=1
 # Enables Python development mode, see https://docs.python.org/3/library/devmode.html
-ENV PYTHONDEVMODE 1
+ENV PYTHONDEVMODE=1
 
 COPY --from=builder-dev /usr/local/bin/ /usr/local/bin/
 COPY --from=builder-dev /usr/local/lib/python3.12/ /usr/local/lib/python3.12/
@@ -70,7 +70,7 @@ RUN --mount=type=cache,mode=0755,id=apt-$TARGETPLATFORM,target=/var/lib/apt/list
     && chown app:app /home/app/.bashrc \
     && chmod +x /usr/local/bin/docker-fix
 
-ENV PYTHONPATH /workspaces/deluge-sync/src/
-ENV PATH $PATH:/workspaces/deluge-sync/.bin
+ENV PYTHONPATH=/workspaces/deluge-sync/src/
+ENV PATH=$PATH:/workspaces/deluge-sync/.bin
 USER app
 WORKDIR /workspaces/deluge-sync/
