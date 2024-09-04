@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: deluge-sync
+  namespace: media
+spec:
+  schedule: "0 * * * *"
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: cleanup
+            image: ghcr.io/angellusmortis/deluge-sync:v1.0
+            imagePullPolicy: IfNotPresent
+            command: ["deluge-sync", "sync"]
+            securityContext:
+              runAsUser: 1000
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+              seccompProfile:
+                type: "RuntimeDefault"
+              capabilities:
+                drop: ["ALL"]
+            env:
+              DELUGE_SYNC_URL: http://deluge-web:8112
+              DELUGE_SYNC_PASSWORD: password
+              DELUGE_SYNC_PATH_MAP: example.com=/downloads/example,example2.com=/downloads/example2
+              DELUGE_SYNC_RULES: '[{"host":"example.com","priority":10,"min_time":"24:00:00"},{"host":"example2.com","priority":1,"min_time":"24:00:00","name_search":"(?i)nightly"},{"host":"example2.com","priority":10,"min_time":"168:00:00"}]'
+              DELUGE_SYNC_LABELS: seeding
+          restartPolicy: Never

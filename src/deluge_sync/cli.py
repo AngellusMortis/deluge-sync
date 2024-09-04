@@ -228,7 +228,7 @@ def main(
         Deluge Web password.
 
     quiet: bool
-        Surpress all output.
+        Surpress most output.
 
     """
 
@@ -387,6 +387,11 @@ def sync(
         Do not actually delete any torrents.
 
     """
+
+    if labels and len(labels) == 1:
+        labels = labels[0].split(",")
+    if exclude_labels and len(exclude_labels) == 1:
+        exclude_labels = exclude_labels[0].split(",")
 
     ctx = get_context()
     console = Console()
