@@ -25,9 +25,14 @@ spec:
               capabilities:
                 drop: ["ALL"]
             env:
-              DELUGE_SYNC_URL: http://deluge-web:8112
-              DELUGE_SYNC_PASSWORD: password
-              DELUGE_SYNC_PATH_MAP: example.com=/downloads/example,example2.com=/downloads/example2
-              DELUGE_SYNC_RULES: '[{"host":"example.com","priority":10,"min_time":"24:00:00"},{"host":"example2.com","priority":1,"min_time":"24:00:00","name_search":"(?i)nightly"},{"host":"example2.com","priority":10,"min_time":"168:00:00"}]'
-              DELUGE_SYNC_LABELS: seeding
+              - name: DELUGE_SYNC_URL
+                value: http://deluge-web:8112
+              - name: DELUGE_SYNC_PASSWORD
+                value: password
+              - name: DELUGE_SYNC_PATH_MAP
+                value: "example.com=/downloads/example,example2.com=/downloads/example2"
+              - name: DELUGE_SYNC_RULES
+                value: '[{"host":"example.com","priority":10,"min_time":"24:00:00"},{"host":"example2.com","priority":1,"min_time":"24:00:00","name_search":"(?i)nightly"},{"host":"example2.com","priority":10,"min_time":"168:00:00"}]'
+              - name: DELUGE_SYNC_LABELS
+                value: seeding
           restartPolicy: Never
