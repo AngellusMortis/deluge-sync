@@ -43,6 +43,13 @@ PARAM_PASSWORD = Annotated[
         env_var="DELUGE_SYNC_PASSWORD",
     ),
 ]
+PARAM_TIMEOUT = Annotated[
+    int,
+    Parameter(
+        ("--deluge-timeout"),
+        env_var="DELUGE_SYNC_TIMEOUT",
+    ),
+]
 PARAM_LABELS = Annotated[
     list[str] | None,
     Parameter(
@@ -211,6 +218,7 @@ def main(
     *tokens: Annotated[str, Parameter(show=False, allow_leading_hyphen=True)],
     deluge_url: PARAM_URL,
     deluge_password: PARAM_PASSWORD,
+    deluge_timeout: PARAM_TIMEOUT = 10,
     quiet: FLAG_QUIET = False,
 ) -> None:
     """
@@ -232,12 +240,16 @@ def main(
 
     """
 
-    client = DelugeClient(host=deluge_url, password=deluge_password)
+    client = DelugeClient(
+        host=deluge_url, password=deluge_password, timeout=deluge_timeout
+    )
     console = Console()
 
     try:
         if not quiet:
-            console.print(f"Logging in to deluge ({deluge_url} )")
+            console.print(
+                f"Logging in to deluge ({deluge_url} timeout={deluge_timeout})"
+            )
         client.auth()
     except Exception:  # noqa: BLE001
         client.close()
