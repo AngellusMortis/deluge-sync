@@ -9,7 +9,6 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Annotated
 
-import httpx
 from cyclopts import App, CycloptsError, Parameter
 from pydantic import BaseModel
 from rich.console import Console
@@ -290,25 +289,16 @@ def main(  # noqa: PLR0913
         _print(
             console,
             (
-                f"Logging in to deluge ({deluge_url} "
-                f"timeout={deluge_timeout} retries={deluge_retries}) "
-                f"host={deluge_host} verify={deluge_verify}"
+                f"Connecting to deluge ({deluge_url} "
+                f"timeout={deluge_timeout} retries={deluge_retries} "
+                f"host={deluge_host} verify={deluge_verify})"
             ),
             quiet=quiet,
         )
-        tries = 0
-        while tries < deluge_retries:
-            try:
-                client.auth()
-            except httpx.ReadTimeout:
-                tries += 1
-                if tries >= deluge_retries:
-                    raise
-                _print(
-                    console,
-                    f"Auth timed out (retries: {deluge_retries-tries}",
-                    quiet=quiet,
-                )
+        client.connect()
+
+        _print(console, "Logging to deluge", quiet=quiet)
+        client.auth()
     except Exception:  # noqa: BLE001
         client.close()
         console.print_exception()

@@ -1,8 +1,10 @@
 """Deluge Client."""
 
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
+from importlib.metadata import version
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -72,9 +74,9 @@ class DelugeClient:
         """Get HTTP session."""
 
         if self._session is None:
-            headers = None
+            headers = {"User-Agent": f"deluge-sync/{version('deluge-sync')}"}
             if self.host_header:
-                headers = {"Host": self.host_header}
+                headers["Host"] = self.host_header
             self._session = httpx.Client(
                 timeout=self.timeout, headers=headers, verify=self.verify
             )
@@ -88,6 +90,21 @@ class DelugeClient:
         if self._session is not None:
             self._session.close()
             self._session = None
+
+    def connect(self, retries: int = 1) -> None:
+        """Load initial page with retries."""
+
+        tries = 0
+        while tries < retries:
+            try:
+                self.session.get(self.host)
+            except (httpx.ReadTimeout, httpx.ConnectTimeout):
+                tries += 1
+                if tries >= retries:
+                    raise
+                time.sleep(1)
+            else:
+                break
 
     def auth(self) -> None:
         """Authenticate with Deluge."""
