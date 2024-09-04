@@ -56,6 +56,8 @@ class DelugeClient:
     host: str
     password: str
     timeout: int = 10
+    host_header: str | None = None
+    verify: bool = True
 
     _session: httpx.Client | None = None
 
@@ -70,7 +72,12 @@ class DelugeClient:
         """Get HTTP session."""
 
         if self._session is None:
-            self._session = httpx.Client(timeout=self.timeout)
+            headers = None
+            if self.host_header:
+                headers = {"Host": self.host_header}
+            self._session = httpx.Client(
+                timeout=self.timeout, headers=headers, verify=self.verify
+            )
             self.auth()
 
         return self._session

@@ -9,6 +9,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 from cyclopts import App, CycloptsError, Parameter
 from pydantic import BaseModel
 from rich.console import Console
@@ -48,6 +49,27 @@ PARAM_TIMEOUT = Annotated[
     Parameter(
         ("--deluge-timeout"),
         env_var="DELUGE_SYNC_TIMEOUT",
+    ),
+]
+PARAM_RETRIES = Annotated[
+    int,
+    Parameter(
+        ("--deluge-retries"),
+        env_var="DELUGE_SYNC_RETRIES",
+    ),
+]
+PARAM_HOST = Annotated[
+    str | None,
+    Parameter(
+        ("--deluge-host"),
+        env_var="DELUGE_SYNC_HOST",
+    ),
+]
+PARAM_VERIFY = Annotated[
+    bool,
+    Parameter(
+        ("--deluge-verify"),
+        env_var="DELUGE_SYNC_VERIFY",
     ),
 ]
 PARAM_LABELS = Annotated[
@@ -214,11 +236,14 @@ def _check_torrent(
 
 
 @app.meta.default
-def main(
+def main(  # noqa: PLR0913
     *tokens: Annotated[str, Parameter(show=False, allow_leading_hyphen=True)],
     deluge_url: PARAM_URL,
     deluge_password: PARAM_PASSWORD,
     deluge_timeout: PARAM_TIMEOUT = 10,
+    deluge_retries: PARAM_RETRIES = 3,
+    deluge_host: PARAM_HOST = None,
+    deluge_verify: PARAM_VERIFY = True,
     quiet: FLAG_QUIET = False,
 ) -> None:
     """
@@ -235,22 +260,55 @@ def main(
     deluge_password: str
         Deluge Web password.
 
+    deluge_timeout: int
+        Deluge connect timeout.
+
+    deluge_retries: int
+        Deluge auth retry count.
+
+    deluge_host: str
+        Deluge host for host header.
+
+    deluge_verify: bool
+        Verify SSL cert for HTTPS requests.
+
     quiet: bool
         Surpress most output.
 
     """
 
     client = DelugeClient(
-        host=deluge_url, password=deluge_password, timeout=deluge_timeout
+        host=deluge_url,
+        password=deluge_password,
+        timeout=deluge_timeout,
+        host_header=deluge_host,
+        verify=deluge_verify,
     )
-    console = Console()
+    console = Console(soft_wrap=False)
 
     try:
-        if not quiet:
-            console.print(
-                f"Logging in to deluge ({deluge_url} timeout={deluge_timeout})"
-            )
-        client.auth()
+        _print(
+            console,
+            (
+                f"Logging in to deluge ({deluge_url} "
+                f"timeout={deluge_timeout} retries={deluge_retries}) "
+                f"host={deluge_host} verify={deluge_verify}"
+            ),
+            quiet=quiet,
+        )
+        tries = 0
+        while tries < deluge_retries:
+            try:
+                client.auth()
+            except httpx.ReadTimeout:
+                tries += 1
+                if tries >= deluge_retries:
+                    raise
+                _print(
+                    console,
+                    f"Auth timed out (retries: {deluge_retries-tries}",
+                    quiet=quiet,
+                )
     except Exception:  # noqa: BLE001
         client.close()
         console.print_exception()
