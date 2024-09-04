@@ -71,6 +71,13 @@ PARAM_VERIFY = Annotated[
         env_var="DELUGE_SYNC_VERIFY",
     ),
 ]
+PARAM_STATE = Annotated[
+    State | None,
+    Parameter(
+        ("-s", "--state"),
+        env_var="DELUGE_SYNC_STATE",
+    ),
+]
 PARAM_LABELS = Annotated[
     list[str] | None,
     Parameter(
@@ -151,6 +158,11 @@ DEFAULT_RULES = [
         host="landof.tv",
         priority=10,
         min_time=timedelta(days=5, hours=12),
+    ),
+    TrackerRule(
+        host="myanonamouse.net",
+        priority=10,
+        min_time=timedelta(days=3, hours=12),
     ),
     TrackerRule(
         host="torrentbytes.net",
@@ -314,6 +326,7 @@ def main(  # noqa: PLR0913
 @app.command()
 def query(
     *,
+    state: PARAM_STATE = None,
     labels: PARAM_LABELS = None,
     exclude_labels: PARAM_EXCLUDE_LABELS = None,
 ) -> int:
@@ -322,6 +335,9 @@ def query(
 
     Parameters
     ----------
+    state: State | None
+        torrent state to filter for.
+
     labels: list[str]
         labels for filtering.
 
@@ -339,7 +355,7 @@ def query(
         extra = f" (label={','.join(labels)})"
     _print(console, f"Getting list of seeding torrents{extra}...", quiet=ctx.quiet)
     torrents = ctx.client.get_torrents(
-        state=State.SEEDING, labels=labels, exclude_labels=exclude_labels
+        state=state, labels=labels, exclude_labels=exclude_labels
     )
     if not torrents:
         console.print("No torrents found")
@@ -352,6 +368,7 @@ def query(
     table.add_column("Progress")
     table.add_column("Label", style="green")
     table.add_column("Tracker", style="yellow")
+    table.add_column("Tracker Status")
     table.add_column("Added")
     table.add_column("Seeding Time")
     table.add_column("Path")
@@ -367,6 +384,7 @@ def query(
             f"{done} / {wanted} {torrent.progress:.0f}%",
             torrent.label,
             torrent.tracker_host,
+            torrent.tracker_status,
             torrent.time_added.isoformat(),
             str(torrent.seeding_time),
             str(torrent.download_location),

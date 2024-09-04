@@ -35,6 +35,7 @@ class Torrent(BaseModel):
 
     id: str
     tracker_host: str
+    tracker_status: str
     time_added: datetime
     state: State
     name: str
@@ -98,10 +99,10 @@ class DelugeClient:
         while tries < retries:
             try:
                 self.session.get(self.host)
-            except (httpx.ReadTimeout, httpx.ConnectTimeout):
+            except (httpx.ReadTimeout, httpx.ConnectTimeout) as err:
                 tries += 1
                 if tries >= retries:
-                    raise
+                    raise ClientError from err
                 time.sleep(1)
             else:
                 break
@@ -129,6 +130,7 @@ class DelugeClient:
             "state",
             "time_added",
             "tracker_host",
+            "tracker_status",
             "seeding_time",
             "label",
             "download_location",
