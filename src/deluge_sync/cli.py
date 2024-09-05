@@ -29,6 +29,8 @@ FLAG_QUIET = Annotated[bool, Parameter(("-q", "--quiet"), env_var="DELUGE_SYNC_Q
 FLAG_DRY = Annotated[
     bool, Parameter(("-d", "--dry-run"), env_var="DELUGE_SYNC_DRY_RUN")
 ]
+FLAG_REMOVE = Annotated[bool, Parameter(("--remove"), env_var="DELUGE_SYNC_DRY_REMOVE")]
+FLAG_MOVE = Annotated[bool, Parameter(("--move"), env_var="DELUGE_SYNC_DRY_MOVE")]
 PARAM_URL = Annotated[
     str,
     Parameter(
@@ -149,6 +151,11 @@ def get_context() -> Context:
 
 DEFAULT_RULES = [
     TrackerRule(
+        host="flacsfor.me",
+        priority=10,
+        min_time=timedelta(days=7),
+    ),
+    TrackerRule(
         host="landof.tv",
         priority=1,
         min_time=timedelta(days=1, hours=2),
@@ -217,7 +224,7 @@ def _get_env_rules(ctx: Context) -> dict[str, list[TrackerRule]] | None:
     return rules
 
 
-def _compile_rules(ctx: Context) -> dict[str, list[TrackerRule]]:
+def _compile_rules(ctx: Context, *, remove: bool) -> dict[str, list[TrackerRule]]:
     rules = _get_env_rules(ctx) or _get_default_rules(ctx)
 
     for host, tracker_rules in rules.items():
@@ -225,7 +232,11 @@ def _compile_rules(ctx: Context) -> dict[str, list[TrackerRule]]:
         rules[host] = sorted_rules
 
     console = Console()
-    _print(console, f"Loaded rules for {len(rules)} trackers", quiet=ctx.quiet)
+    _print(
+        console,
+        f"Loaded rules for {len(rules)} trackers (remove: {remove})",
+        quiet=ctx.quiet,
+    )
     return rules
 
 
@@ -353,7 +364,7 @@ def query(
     extra = ""
     if labels:
         extra = f" (label={','.join(labels)})"
-    _print(console, f"Getting list of seeding torrents{extra}...", quiet=ctx.quiet)
+    _print(console, f"Getting list of torrents{extra}...", quiet=ctx.quiet)
     torrents = ctx.client.get_torrents(
         state=state, labels=labels, exclude_labels=exclude_labels
     )
@@ -435,13 +446,36 @@ def _print_label_text(
     _print(console, f"Getting list of seeding torrents{extra}...", quiet=ctx.quiet)
 
 
+def _remove_torrents(
+    ctx: Context, torrents: dict[str, Torrent], to_remove: list[str], *, dry_run: bool
+) -> None:
+    console = Console()
+
+    _print(console, f"Torrents to delete: {len(to_remove)}", quiet=ctx.quiet)
+    for tid in to_remove:
+        _print(
+            console,
+            f"\tRemoving torrent{{dry}}: {torrents[tid]}",
+            quiet=ctx.quiet,
+            dry_run=dry_run,
+        )
+
+        try:
+            if not dry_run:
+                ctx.client.remove_torrent(tid)
+        except Exception:  # noqa: BLE001
+            console.print("[red]Failed to remove torrent[/red]")
+
+
 @app.command()
-def sync(
+def sync(  # noqa: PLR0913
     *,
     labels: PARAM_LABELS = None,
     exclude_labels: PARAM_EXCLUDE_LABELS = None,
     default_seed_time: PARAM_DEFAULT_SEED = timedelta(minutes=90),
     path_list: PARAM_PATH_MAP = None,
+    remove: FLAG_REMOVE = True,
+    move: FLAG_MOVE = True,
     dry_run: FLAG_DRY = False,
 ) -> int:
     """
@@ -461,6 +495,12 @@ def sync(
     path_list: list[str]
         Map of tracker (key) to download folder (value). Will move to path.
 
+    remove: bool
+        Automatically remove torrents past the min seed time.
+
+    move: bool
+        Automatically move torrents to correct paths.
+
     dry_run: bool
         Do not actually delete any torrents.
 
@@ -473,24 +513,34 @@ def sync(
 
     ctx = get_context()
     console = Console()
-    rules = _compile_rules(ctx)
+    rules = _compile_rules(ctx, remove=remove)
     path_map = _convert_to_dict(path_list or [])
-    _print(console, f"Loaded path maps for {len(path_map)} trackers", quiet=ctx.quiet)
+    _print(
+        console,
+        f"Loaded path maps for {len(path_map)} trackers (move: {move})",
+        quiet=ctx.quiet,
+    )
 
     _print_label_text(console, ctx, labels, exclude_labels)
     torrents = ctx.client.get_torrents(
         state=State.SEEDING, labels=labels, exclude_labels=exclude_labels
     )
+    if not torrents:
+        _print(console, "No torrents to process", quiet=ctx.quiet)
+        return 0
+
+    _print(console, f"{len(torrents)} torrent(s) to process", quiet=ctx.quiet)
+
     to_remove = []
     for torrent in torrents.values():
-        if _check_torrent(
+        if remove and _check_torrent(
             torrent, rules.get(torrent.tracker_host, []), default_seed_time
         ):
             to_remove.append(torrent.id)
             continue
 
         expected_path = path_map.get(torrent.tracker_host)
-        if expected_path and torrent.download_location != expected_path:
+        if move and expected_path and torrent.download_location != expected_path:
             _print(
                 console,
                 f"\tMoving torrent{{dry}}: {torrent}",
@@ -500,19 +550,5 @@ def sync(
             if not dry_run:
                 ctx.client.move_torrent(torrent.id, str(expected_path))
 
-    _print(console, f"Torrents to delete: {len(to_remove)}", quiet=ctx.quiet)
-    for tid in to_remove:
-        _print(
-            console,
-            f"\tRemoving torrent{{dry}}: {torrents[tid]}",
-            quiet=ctx.quiet,
-            dry_run=dry_run,
-        )
-
-        try:
-            if not dry_run:
-                ctx.client.remove_torrent(tid)
-        except Exception:  # noqa: BLE001
-            console.print("[red]Failed to remove torrent[/red]")
-
+    _remove_torrents(ctx, torrents, to_remove, dry_run=dry_run)
     return 0
