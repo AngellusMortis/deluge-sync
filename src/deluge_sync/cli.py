@@ -453,9 +453,10 @@ def _remove_torrents(
 
     _print(console, f"Torrents to delete: {len(to_remove)}", quiet=ctx.quiet)
     for tid in to_remove:
+        escaped = str(torrents[tid]).replace("{", "{{").replace("}", "}}")
         _print(
             console,
-            f"\tRemoving torrent{{dry}}: {torrents[tid]}",
+            f"\tRemoving torrent{{dry}}: {escaped}",
             quiet=ctx.quiet,
             dry_run=dry_run,
         )
@@ -541,9 +542,10 @@ def sync(  # noqa: PLR0913
 
         expected_path = path_map.get(torrent.tracker_host)
         if move and expected_path and torrent.download_location != expected_path:
+            escaped = str(torrent).replace("{", "{{").replace("}", "}}")
             _print(
                 console,
-                f"\tMoving torrent{{dry}}: {torrent}",
+                f"\tMoving torrent{{dry}}: {escaped}",
                 quiet=ctx.quiet,
                 dry_run=dry_run,
             )
