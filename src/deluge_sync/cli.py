@@ -29,8 +29,9 @@ FLAG_QUIET = Annotated[bool, Parameter(("-q", "--quiet"), env_var="DELUGE_SYNC_Q
 FLAG_DRY = Annotated[
     bool, Parameter(("-d", "--dry-run"), env_var="DELUGE_SYNC_DRY_RUN")
 ]
-FLAG_REMOVE = Annotated[bool, Parameter(("--remove"), env_var="DELUGE_SYNC_DRY_REMOVE")]
-FLAG_MOVE = Annotated[bool, Parameter(("--move"), env_var="DELUGE_SYNC_DRY_MOVE")]
+FLAG_REMOVE = Annotated[bool, Parameter(("--remove"), env_var="DELUGE_SYNC_REMOVE")]
+FLAG_MOVE = Annotated[bool, Parameter(("--move"), env_var="DELUGE_SYNC_MOVE")]
+FLAG_RELABEL = Annotated[bool, Parameter(("--relabel"), env_var="DELUGE_SYNC_RELABEL")]
 PARAM_URL = Annotated[
     str,
     Parameter(
@@ -108,6 +109,14 @@ PARAM_PATH_MAP = Annotated[
     Parameter(
         ("-m", "--path-map"),
         env_var="DELUGE_SYNC_PATH_MAP",
+    ),
+]
+
+PARAM_LABEL_REMAP = Annotated[
+    list[str] | None,
+    Parameter(
+        ("--label-remap"),
+        env_var="DELUGE_SYNC_LABEL_REMAP",
     ),
 ]
 
@@ -406,13 +415,22 @@ def query(
     return 0
 
 
-def _convert_to_dict(path_list: list[str]) -> dict[str, Path]:
-    if len(path_list) == 1:
-        path_list = path_list[0].split(",")
+def _convert_to_dict(items: list[str]) -> dict[str, str]:
+    if len(items) == 1:
+        items = items[0].split(",")
 
-    path_map = {}
-    for item in path_list:
+    item_map = {}
+    for item in items:
         key, value = item.split("=")
+        item_map[key] = value
+
+    return item_map
+
+
+def _convert_to_dict_path(items: list[str]) -> dict[str, Path]:
+    item_map = _convert_to_dict(items)
+    path_map = {}
+    for key, value in item_map.items():
         path_map[key] = Path(value)
 
     return path_map
@@ -475,8 +493,10 @@ def sync(  # noqa: PLR0913
     exclude_labels: PARAM_EXCLUDE_LABELS = None,
     default_seed_time: PARAM_DEFAULT_SEED = timedelta(minutes=90),
     path_list: PARAM_PATH_MAP = None,
+    label_remap_list: PARAM_LABEL_REMAP = None,
     remove: FLAG_REMOVE = True,
     move: FLAG_MOVE = True,
+    relabel: FLAG_RELABEL = True,
     dry_run: FLAG_DRY = False,
 ) -> int:
     """
@@ -496,11 +516,17 @@ def sync(  # noqa: PLR0913
     path_list: list[str]
         Map of tracker (key) to download folder (value). Will move to path.
 
+    label_remap_list: list[str]
+        Map of tracker (key) to label (value). Will change label if has tracker.
+
     remove: bool
         Automatically remove torrents past the min seed time.
 
     move: bool
         Automatically move torrents to correct paths.
+
+    relabel: bool
+        Automatically relabel torrents for specific trackers to new label.
 
     dry_run: bool
         Do not actually delete any torrents.
@@ -515,7 +541,8 @@ def sync(  # noqa: PLR0913
     ctx = get_context()
     console = Console()
     rules = _compile_rules(ctx, remove=remove)
-    path_map = _convert_to_dict(path_list or [])
+    path_map = _convert_to_dict_path(path_list or [])
+    label_remap = _convert_to_dict(label_remap_list or [])
     _print(
         console,
         f"Loaded path maps for {len(path_map)} trackers (move: {move})",
@@ -534,15 +561,36 @@ def sync(  # noqa: PLR0913
 
     to_remove = []
     for torrent in torrents.values():
-        if remove and _check_torrent(
-            torrent, rules.get(torrent.tracker_host, []), default_seed_time
+        changed_label = False
+        escaped = str(torrent).replace("{", "{{").replace("}", "}}")
+
+        if (
+            relabel
+            and (new_label := label_remap.get(torrent.tracker_host)) is not None
+            and torrent.label != new_label
+        ):
+            _print(
+                console,
+                f"\tChanging label of torrent to {new_label}{{dry}}: {escaped}",
+                quiet=ctx.quiet,
+                dry_run=dry_run,
+            )
+            ctx.client.change_label_torrent(torrent.id, new_label)
+            torrent.label = new_label
+            changed_label = True
+
+        if (
+            remove
+            and not changed_label
+            and _check_torrent(
+                torrent, rules.get(torrent.tracker_host, []), default_seed_time
+            )
         ):
             to_remove.append(torrent.id)
             continue
 
         expected_path = path_map.get(torrent.tracker_host)
         if move and expected_path and torrent.download_location != expected_path:
-            escaped = str(torrent).replace("{", "{{").replace("}", "}}")
             _print(
                 console,
                 f"\tMoving torrent{{dry}}: {escaped}",
