@@ -575,7 +575,8 @@ def sync(  # noqa: PLR0913
                 quiet=ctx.quiet,
                 dry_run=dry_run,
             )
-            ctx.client.change_label_torrent(torrent.id, new_label)
+            if not dry_run:
+                ctx.client.change_label_torrent(torrent.id, new_label)
             torrent.label = new_label
             changed_label = True
 
