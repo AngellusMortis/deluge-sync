@@ -9,10 +9,20 @@ ARG TARGETPLATFORM
 RUN addgroup --system --gid 1000 app \
     && adduser --system --shell /bin/bash --uid 1000 --home /home/app --ingroup app app
 
+RUN --mount=target=/var/lib/apt/lists,type=cache,sharing=locked,id=apt-$TARGETPLATFORM \
+    --mount=target=/var/cache/apt,type=cache,sharing=locked,id=apt-$TARGETPLATFORM \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+    && apt-get update -qq \
+    && apt-get install -y curl jq apt-transport-https ca-certificates gnupg \
+    && curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg \
+    && echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list \
+    && apt-get update -qq \
+    && apt-get install -y kubectl
 
 FROM base AS builder
 
-RUN --mount=type=cache,mode=0755,id=apt-$TARGETPLATFORM,target=/var/lib/apt/lists \
+RUN --mount=target=/var/lib/apt/lists,type=cache,sharing=locked,id=apt-$TARGETPLATFORM \
+    --mount=target=/var/cache/apt,type=cache,sharing=locked,id=apt-$TARGETPLATFORM \
     apt-get update -qq \
     && apt-get install -yqq build-essential git
 
@@ -63,7 +73,8 @@ COPY --from=builder-dev /usr/local/lib/python3.12/ /usr/local/lib/python3.12/
 COPY ./.docker/docker-fix.sh /usr/local/bin/docker-fix
 COPY ./.docker/bashrc /root/.bashrc
 COPY ./.docker/bashrc /home/app/.bashrc
-RUN --mount=type=cache,mode=0755,id=apt-$TARGETPLATFORM,target=/var/lib/apt/lists \
+RUN --mount=target=/var/lib/apt/lists,type=cache,sharing=locked,id=apt-$TARGETPLATFORM \
+    --mount=target=/var/cache/apt,type=cache,sharing=locked,id=apt-$TARGETPLATFORM \
     apt-get update -qq \
     && apt-get install -yqq git curl vim procps curl jq sudo \
     && echo 'app ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers \
