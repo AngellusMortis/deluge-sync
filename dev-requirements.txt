@@ -4,7 +4,7 @@ annotated-types==0.7.0
     # via
     #   -c requirements.txt
     #   pydantic
-anyio==4.4.0
+anyio==4.6.0
     # via
     #   -c requirements.txt
     #   httpx
@@ -12,7 +12,7 @@ attrs==24.2.0
     # via
     #   -c requirements.txt
     #   cyclopts
-build==1.2.1
+build==1.2.2.post1
     # via deluge-sync (pyproject.toml)
 certifi==2024.8.30
     # via
@@ -20,7 +20,7 @@ certifi==2024.8.30
     #   httpcore
     #   httpx
     #   requests
-cffi==1.17.0
+cffi==1.17.1
     # via cryptography
 charset-normalizer==3.3.2
     # via requests
@@ -45,7 +45,7 @@ h11==0.14.0
     # via
     #   -c requirements.txt
     #   httpcore
-httpcore==1.0.5
+httpcore==1.0.6
     # via
     #   -c requirements.txt
     #   httpx
@@ -53,25 +53,25 @@ httpx==0.27.2
     # via
     #   -c requirements.txt
     #   deluge-sync (pyproject.toml)
-idna==3.8
+idna==3.10
     # via
     #   -c requirements.txt
     #   anyio
     #   httpx
     #   requests
-importlib-metadata==8.4.0
+importlib-metadata==8.5.0
     # via twine
 jaraco-classes==3.4.0
     # via keyring
 jaraco-context==6.0.1
     # via keyring
-jaraco-functools==4.0.2
+jaraco-functools==4.1.0
     # via keyring
 jeepney==0.8.0
     # via
     #   keyring
     #   secretstorage
-keyring==25.3.0
+keyring==25.4.1
     # via twine
 markdown-it-py==3.0.0
     # via
@@ -81,7 +81,7 @@ mdurl==0.1.2
     # via
     #   -c requirements.txt
     #   markdown-it-py
-more-itertools==10.4.0
+more-itertools==10.5.0
     # via
     #   jaraco-classes
     #   jaraco-functools
@@ -97,11 +97,11 @@ pkginfo==1.10.0
     # via twine
 pycparser==2.22
     # via cffi
-pydantic==2.8.2
+pydantic==2.9.2
     # via
     #   -c requirements.txt
     #   deluge-sync (pyproject.toml)
-pydantic-core==2.20.1
+pydantic-core==2.23.4
     # via
     #   -c requirements.txt
     #   pydantic
@@ -110,7 +110,7 @@ pygments==2.18.0
     #   -c requirements.txt
     #   readme-renderer
     #   rich
-pyproject-hooks==1.1.0
+pyproject-hooks==1.2.0
     # via build
 python-dotenv==1.0.1
     # via deluge-sync (pyproject.toml)
@@ -124,7 +124,7 @@ requests-toolbelt==1.0.0
     # via twine
 rfc3986==2.0.0
     # via twine
-rich==13.8.0
+rich==13.9.2
     # via
     #   -c requirements.txt
     #   deluge-sync (pyproject.toml)
@@ -135,7 +135,7 @@ rich-rst==1.3.1
     # via
     #   -c requirements.txt
     #   cyclopts
-ruff==0.6.3
+ruff==0.6.9
     # via deluge-sync (pyproject.toml)
 secretstorage==3.3.3
     # via keyring
@@ -153,9 +153,9 @@ typing-extensions==4.12.2
     #   mypy
     #   pydantic
     #   pydantic-core
-urllib3==2.2.2
+urllib3==2.2.3
     # via
     #   requests
     #   twine
-zipp==3.20.1
+zipp==3.20.2
     # via importlib-metadata
