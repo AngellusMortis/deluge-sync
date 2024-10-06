@@ -4,8 +4,10 @@ import json
 import os
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
 
@@ -24,6 +26,8 @@ app = App(
     Python app to manage Deluge.
 """,
 )
+
+_GIBIBYTE = Decimal(1024) ** 3
 
 FLAG_QUIET = Annotated[bool, Parameter(("-q", "--quiet"), env_var="DELUGE_SYNC_QUIET")]
 FLAG_DRY = Annotated[
@@ -120,6 +124,14 @@ PARAM_LABEL_REMAP = Annotated[
     ),
 ]
 
+PARAM_HOST_ALIAS = Annotated[
+    list[str] | None,
+    Parameter(
+        ("--host-alias"),
+        env_var="DELUGE_SYNC_HOST_ALIAS_MAP",
+    ),
+]
+
 
 class TrackerRule(BaseModel):
     """Tracker rules."""
@@ -128,6 +140,8 @@ class TrackerRule(BaseModel):
     priority: int
     min_time: timedelta
     name_search: re.Pattern[str] | None = None
+    keep_count: int | None = None
+    keep_size: int | None = None
 
 
 @dataclass
@@ -147,6 +161,8 @@ class _State:
 
 _STATE = _State()
 NO_CONTEXT_ERROR = "No CLI context"
+INVALID_PRIORITY = "Priority must be 1 or greater"
+INVALID_KEEP = "Keep count and keep size are mutually exclusive"
 
 
 def get_context() -> Context:
@@ -238,6 +254,19 @@ def _compile_rules(ctx: Context, *, remove: bool) -> dict[str, list[TrackerRule]
 
     for host, tracker_rules in rules.items():
         sorted_rules = sorted(tracker_rules, key=lambda r: r.priority)
+        if sorted_rules and sorted_rules[0].priority <= 1:
+            raise CycloptsError(msg=INVALID_PRIORITY)
+
+        if len(sorted_rules) > 1:
+            priority_zero_rule = sorted_rules[0].model_copy()
+            for rule in sorted_rules:
+                if rule.keep_count:
+                    priority_zero_rule.keep_count = rule.keep_count
+            if priority_zero_rule.keep_count or priority_zero_rule.keep_size:
+                if priority_zero_rule.keep_count and priority_zero_rule.keep_size:
+                    raise CycloptsError(msg=INVALID_KEEP)
+                sorted_rules.insert(0, priority_zero_rule)
+
         rules[host] = sorted_rules
 
     console = Console()
@@ -249,8 +278,87 @@ def _compile_rules(ctx: Context, *, remove: bool) -> dict[str, list[TrackerRule]
     return rules
 
 
+def _filter_out_keep(
+    console: Console,
+    ctx: Context,
+    torrents: Iterable[Torrent],
+    rules: dict[str, list[TrackerRule]],
+) -> list[Torrent]:
+    torrents_by_tracker: dict[str, list[Torrent]] = {}
+    for torrent in torrents:
+        host_torrents = torrents_by_tracker.get(torrent.tracker_alias, [])
+        host_torrents.append(torrent)
+        torrents_by_tracker[torrent.tracker_alias] = host_torrents
+
+    to_check: list[Torrent] = []
+    for host, tracker_torrents in torrents_by_tracker.items():
+        sorted_torrents = sorted(
+            tracker_torrents, key=lambda x: x.total_wanted, reverse=True
+        )
+        tracker_rules = rules.get(host, [])
+        if tracker_rules:
+            rule_zero = tracker_rules[0]
+            if rule_zero.keep_count:
+                count = len(sorted_torrents)
+                if count < rule_zero.keep_count:
+                    _print(
+                        console,
+                        (
+                            f"Tracker ({rule_zero.host}) count ({count}) is "
+                            f"less than {rule_zero.keep_count}, keeping all"
+                        ),
+                        quiet=ctx.quiet,
+                    )
+                else:
+                    _print(
+                        console,
+                        (
+                            f"Tracker ({rule_zero.host}) is over limit over limit"
+                            f" ({rule_zero.keep_count}), {count - rule_zero.keep_count}"
+                            " to check"
+                        ),
+                        quiet=ctx.quiet,
+                    )
+                    to_check += sorted_torrents[rule_zero.keep_count :]
+            elif rule_zero.keep_size:
+                total_size = Decimal(0)
+                to_add: list[Torrent] | None = None
+                for index, torrent in enumerate(sorted_torrents):
+                    total_size += Decimal(torrent.total_wanted) / _GIBIBYTE
+                    if total_size > rule_zero.keep_size:
+                        to_add = sorted_torrents[index + 1 :]
+                        break
+                if to_add:
+                    to_check += to_add
+                    _print(
+                        console,
+                        (
+                            f"Tracker ({rule_zero.host}) download size "
+                            f"({total_size:.2f} GiB) is over limit "
+                            f"{rule_zero.keep_size:.2f} GiB, {len(to_add)} to check"
+                        ),
+                        quiet=ctx.quiet,
+                    )
+                else:
+                    _print(
+                        console,
+                        (
+                            f"Tracker ({rule_zero.host}) download size "
+                            f"({total_size:.2f} GiB) is less than "
+                            f"{rule_zero.keep_size:.2f} GiB, keeping all"
+                        ),
+                        quiet=ctx.quiet,
+                    )
+            else:
+                to_check += sorted_torrents
+
+    return to_check
+
+
 def _check_torrent(
-    torrent: Torrent, rules: list[TrackerRule], default_seed_time: timedelta
+    torrent: Torrent,
+    rules: list[TrackerRule],
+    default_seed_time: timedelta,
 ) -> bool:
     if not rules:
         return torrent.seeding_time > default_seed_time
@@ -403,7 +511,7 @@ def query(
             torrent.state,
             f"{done} / {wanted} {torrent.progress:.0f}%",
             torrent.label,
-            torrent.tracker_host,
+            torrent.tracker_alias,
             torrent.tracker_status,
             torrent.time_added.isoformat(),
             str(torrent.seeding_time),
@@ -494,6 +602,7 @@ def sync(  # noqa: PLR0913
     default_seed_time: PARAM_DEFAULT_SEED = timedelta(minutes=90),
     path_list: PARAM_PATH_MAP = None,
     label_remap_list: PARAM_LABEL_REMAP = None,
+    host_aliases_list: PARAM_HOST_ALIAS = None,
     remove: FLAG_REMOVE = True,
     move: FLAG_MOVE = True,
     relabel: FLAG_RELABEL = True,
@@ -519,6 +628,9 @@ def sync(  # noqa: PLR0913
     label_remap_list: list[str]
         Map of tracker (key) to label (value). Will change label if has tracker.
 
+    host_aliases_list: list[str]
+        Map of tracker alias (key) to tracker (value).
+
     remove: bool
         Automatically remove torrents past the min seed time.
 
@@ -543,6 +655,7 @@ def sync(  # noqa: PLR0913
     rules = _compile_rules(ctx, remove=remove)
     path_map = _convert_to_dict_path(path_list or [])
     label_remap = _convert_to_dict(label_remap_list or [])
+    host_aliases = _convert_to_dict(host_aliases_list or [])
     _print(
         console,
         f"Loaded path maps for {len(path_map)} trackers (move: {move})",
@@ -551,7 +664,10 @@ def sync(  # noqa: PLR0913
 
     _print_label_text(console, ctx, labels, exclude_labels)
     torrents = ctx.client.get_torrents(
-        state=State.SEEDING, labels=labels, exclude_labels=exclude_labels
+        state=State.SEEDING,
+        labels=labels,
+        exclude_labels=exclude_labels,
+        aliases=host_aliases,
     )
     if not torrents:
         _print(console, "No torrents to process", quiet=ctx.quiet)
@@ -560,13 +676,13 @@ def sync(  # noqa: PLR0913
     _print(console, f"{len(torrents)} torrent(s) to process", quiet=ctx.quiet)
 
     to_remove = []
-    for torrent in torrents.values():
+    for torrent in _filter_out_keep(console, ctx, torrents.values(), rules):
         changed_label = False
         escaped = str(torrent).replace("{", "{{").replace("}", "}}")
 
         if (
             relabel
-            and (new_label := label_remap.get(torrent.tracker_host)) is not None
+            and (new_label := label_remap.get(torrent.tracker_alias)) is not None
             and torrent.label != new_label
         ):
             _print(
@@ -584,13 +700,13 @@ def sync(  # noqa: PLR0913
             remove
             and not changed_label
             and _check_torrent(
-                torrent, rules.get(torrent.tracker_host, []), default_seed_time
+                torrent, rules.get(torrent.tracker_alias, []), default_seed_time
             )
         ):
             to_remove.append(torrent.id)
             continue
 
-        expected_path = path_map.get(torrent.tracker_host)
+        expected_path = path_map.get(torrent.tracker_alias)
         if move and expected_path and torrent.download_location != expected_path:
             _print(
                 console,

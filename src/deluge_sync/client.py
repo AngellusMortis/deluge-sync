@@ -35,6 +35,7 @@ class Torrent(BaseModel):
 
     id: str
     tracker_host: str
+    tracker_alias: str
     tracker_status: str
     time_added: datetime
     state: State
@@ -121,10 +122,12 @@ class DelugeClient:
         state: State | None = None,
         labels: list[str] | None = None,
         exclude_labels: list[str] | None = None,
+        aliases: dict[str, str] | None = None,
     ) -> dict[str, Torrent]:
         """Get list of torrent from Deluge."""
 
         excluded = set(exclude_labels) if exclude_labels else set()
+        aliases = aliases or {}
         fields = [
             "name",
             "state",
@@ -168,6 +171,9 @@ class DelugeClient:
         for key, values in torrent_data.items():
             if values["label"] in excluded:
                 continue
+            values["tracker_alias"] = aliases.get(
+                values["tracker_host"], values["tracker_host"]
+            )
             return_data[key] = Torrent(id=key, **values)
 
         return return_data
