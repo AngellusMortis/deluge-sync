@@ -296,61 +296,65 @@ def _filter_out_keep(
             tracker_torrents, key=lambda x: x.total_wanted, reverse=True
         )
         tracker_rules = rules.get(host, [])
-        if tracker_rules:
-            rule_zero = tracker_rules[0]
-            if rule_zero.keep_count:
-                count = len(sorted_torrents)
-                if count < rule_zero.keep_count:
-                    _print(
-                        console,
-                        (
-                            f"Tracker ({rule_zero.host}) count ({count}) is "
-                            f"less than {rule_zero.keep_count}, keeping all"
-                        ),
-                        quiet=ctx.quiet,
-                    )
-                else:
-                    _print(
-                        console,
-                        (
-                            f"Tracker ({rule_zero.host}) is over limit over limit"
-                            f" ({rule_zero.keep_count}), {count - rule_zero.keep_count}"
-                            " to check"
-                        ),
-                        quiet=ctx.quiet,
-                    )
-                    to_check += sorted_torrents[rule_zero.keep_count :]
-            elif rule_zero.keep_size:
-                total_size = Decimal(0)
-                to_add: list[Torrent] | None = None
-                for index, torrent in enumerate(sorted_torrents):
-                    total_size += Decimal(torrent.total_wanted) / _GIBIBYTE
-                    if total_size > rule_zero.keep_size:
-                        to_add = sorted_torrents[index + 1 :]
-                        break
-                if to_add:
-                    to_check += to_add
-                    _print(
-                        console,
-                        (
-                            f"Tracker ({rule_zero.host}) download size "
-                            f"({total_size:.2f} GiB) is over limit "
-                            f"{rule_zero.keep_size:.2f} GiB, {len(to_add)} to check"
-                        ),
-                        quiet=ctx.quiet,
-                    )
-                else:
-                    _print(
-                        console,
-                        (
-                            f"Tracker ({rule_zero.host}) download size "
-                            f"({total_size:.2f} GiB) is less than "
-                            f"{rule_zero.keep_size:.2f} GiB, keeping all"
-                        ),
-                        quiet=ctx.quiet,
-                    )
+        if not tracker_rules:
+            to_check += sorted_torrents
+            continue
+
+        rule_zero = tracker_rules[0]
+        if not rule_zero.keep_count and not rule_zero.keep_size:
+            to_check += sorted_torrents
+
+        if rule_zero.keep_count:
+            count = len(sorted_torrents)
+            if count < rule_zero.keep_count:
+                _print(
+                    console,
+                    (
+                        f"Tracker ({rule_zero.host}) count ({count}) is "
+                        f"less than {rule_zero.keep_count}, keeping all"
+                    ),
+                    quiet=ctx.quiet,
+                )
             else:
-                to_check += sorted_torrents
+                _print(
+                    console,
+                    (
+                        f"Tracker ({rule_zero.host}) is over limit over limit"
+                        f" ({rule_zero.keep_count}), {count - rule_zero.keep_count}"
+                        " to check"
+                    ),
+                    quiet=ctx.quiet,
+                )
+                to_check += sorted_torrents[rule_zero.keep_count :]
+        elif rule_zero.keep_size:
+            total_size = Decimal(0)
+            to_add: list[Torrent] | None = None
+            for index, torrent in enumerate(sorted_torrents):
+                total_size += Decimal(torrent.total_wanted) / _GIBIBYTE
+                if total_size > rule_zero.keep_size:
+                    to_add = sorted_torrents[index + 1 :]
+                    break
+            if to_add:
+                to_check += to_add
+                _print(
+                    console,
+                    (
+                        f"Tracker ({rule_zero.host}) download size "
+                        f"({total_size:.2f} GiB) is over limit "
+                        f"{rule_zero.keep_size:.2f} GiB, {len(to_add)} to check"
+                    ),
+                    quiet=ctx.quiet,
+                )
+            else:
+                _print(
+                    console,
+                    (
+                        f"Tracker ({rule_zero.host}) download size "
+                        f"({total_size:.2f} GiB) is less than "
+                        f"{rule_zero.keep_size:.2f} GiB, keeping all"
+                    ),
+                    quiet=ctx.quiet,
+                )
 
     return to_check
 
@@ -707,6 +711,8 @@ def sync(  # noqa: PLR0913
             continue
 
         expected_path = path_map.get(torrent.tracker_alias)
+        print(torrent)
+        print(torrent.download_location, expected_path)
         if move and expected_path and torrent.download_location != expected_path:
             _print(
                 console,
