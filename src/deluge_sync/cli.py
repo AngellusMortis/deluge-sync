@@ -744,8 +744,6 @@ def sync(  # noqa: PLR0913
             continue
 
         expected_path = path_map.get(torrent.tracker_alias)
-        print(torrent)
-        print(torrent.download_location, expected_path)
         if move and expected_path and torrent.download_location != expected_path:
             _print(
                 console,
