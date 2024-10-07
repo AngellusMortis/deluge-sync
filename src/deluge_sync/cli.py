@@ -28,6 +28,20 @@ app = App(
 )
 
 _GIBIBYTE = Decimal(1024) ** 3
+COUNT_UNDER = (
+    "Tracker ({tracker}) count ({count}) is less than {keep_count}, keeping all"
+)
+COUNT_OVER = (
+    "Tracker ({tracker}) is over limit over limit ({keep_count}), {check} to check"
+)
+SIZE_OVER = (
+    "Tracker ({tracker}) download size (at least {total_size:.2f} GiB) is over limit "
+    "{keep_size:.2f} GiB, {to_add} to check"
+)
+SIZE_UNDER = (
+    "Tracker ({tracker}) download size ({total_size:.2f} GiB) is less "
+    "than {keep_size:.2f} GiB, keeping all"
+)
 
 FLAG_QUIET = Annotated[bool, Parameter(("-q", "--quiet"), env_var="DELUGE_SYNC_QUIET")]
 FLAG_DRY = Annotated[
@@ -278,17 +292,37 @@ def _compile_rules(ctx: Context, *, remove: bool) -> dict[str, list[TrackerRule]
     return rules
 
 
-def _filter_out_keep(
-    console: Console,
-    ctx: Context,
-    torrents: Iterable[Torrent],
-    rules: dict[str, list[TrackerRule]],
-) -> list[Torrent]:
+def _torrents_by_tracker(torrents: Iterable[Torrent]) -> dict[str, list[Torrent]]:
     torrents_by_tracker: dict[str, list[Torrent]] = {}
     for torrent in torrents:
         host_torrents = torrents_by_tracker.get(torrent.tracker_alias, [])
         host_torrents.append(torrent)
         torrents_by_tracker[torrent.tracker_alias] = host_torrents
+
+    return torrents_by_tracker
+
+
+def _get_under_size(
+    torrents: list[Torrent], keep_size: int
+) -> tuple[Decimal, list[Torrent] | None]:
+    total_size = Decimal(0)
+    to_add: list[Torrent] | None = None
+    for index, torrent in enumerate(torrents):
+        total_size += Decimal(torrent.total_wanted) / _GIBIBYTE
+        if total_size > keep_size:
+            to_add = torrents[index + 1 :]
+            break
+
+    return total_size, to_add
+
+
+def _filter_out_keep(
+    console: Console,
+    ctx: Context,
+    torrents: Iterable[Torrent],
+    rules: dict[str, list[TrackerRule]],
+) -> set[str]:
+    torrents_by_tracker = _torrents_by_tracker(torrents)
 
     to_check: list[Torrent] = []
     for host, tracker_torrents in torrents_by_tracker.items():
@@ -303,60 +337,57 @@ def _filter_out_keep(
         rule_zero = tracker_rules[0]
         if not rule_zero.keep_count and not rule_zero.keep_size:
             to_check += sorted_torrents
+            continue
 
         if rule_zero.keep_count:
             count = len(sorted_torrents)
             if count < rule_zero.keep_count:
                 _print(
                     console,
-                    (
-                        f"Tracker ({rule_zero.host}) count ({count}) is "
-                        f"less than {rule_zero.keep_count}, keeping all"
+                    COUNT_UNDER.format(
+                        tracker=rule_zero.host,
+                        count=count,
+                        keep_count=rule_zero.keep_count,
                     ),
                     quiet=ctx.quiet,
                 )
             else:
                 _print(
                     console,
-                    (
-                        f"Tracker ({rule_zero.host}) is over limit over limit"
-                        f" ({rule_zero.keep_count}), {count - rule_zero.keep_count}"
-                        " to check"
+                    COUNT_OVER.format(
+                        tracker=rule_zero.host,
+                        check=count - rule_zero.keep_count,
+                        keep_count=rule_zero.keep_count,
                     ),
                     quiet=ctx.quiet,
                 )
                 to_check += sorted_torrents[rule_zero.keep_count :]
         elif rule_zero.keep_size:
-            total_size = Decimal(0)
-            to_add: list[Torrent] | None = None
-            for index, torrent in enumerate(sorted_torrents):
-                total_size += Decimal(torrent.total_wanted) / _GIBIBYTE
-                if total_size > rule_zero.keep_size:
-                    to_add = sorted_torrents[index + 1 :]
-                    break
+            total_size, to_add = _get_under_size(sorted_torrents, rule_zero.keep_size)
             if to_add:
                 to_check += to_add
                 _print(
                     console,
-                    (
-                        f"Tracker ({rule_zero.host}) download size "
-                        f"({total_size:.2f} GiB) is over limit "
-                        f"{rule_zero.keep_size:.2f} GiB, {len(to_add)} to check"
+                    SIZE_OVER.format(
+                        tracker=rule_zero.host,
+                        total_size=total_size,
+                        keep_size=rule_zero.keep_size,
+                        to_add=len(to_add),
                     ),
                     quiet=ctx.quiet,
                 )
             else:
                 _print(
                     console,
-                    (
-                        f"Tracker ({rule_zero.host}) download size "
-                        f"({total_size:.2f} GiB) is less than "
-                        f"{rule_zero.keep_size:.2f} GiB, keeping all"
+                    SIZE_UNDER.format(
+                        tracker=rule_zero.host,
+                        total_size=total_size,
+                        keep_size=rule_zero.keep_size,
                     ),
                     quiet=ctx.quiet,
                 )
 
-    return to_check
+    return {t.id for t in to_check}
 
 
 def _check_torrent(
@@ -679,8 +710,9 @@ def sync(  # noqa: PLR0913
 
     _print(console, f"{len(torrents)} torrent(s) to process", quiet=ctx.quiet)
 
+    can_remove = _filter_out_keep(console, ctx, torrents.values(), rules)
     to_remove = []
-    for torrent in _filter_out_keep(console, ctx, torrents.values(), rules):
+    for torrent in torrents.values():
         changed_label = False
         escaped = str(torrent).replace("{", "{{").replace("}", "}}")
 
@@ -703,6 +735,7 @@ def sync(  # noqa: PLR0913
         if (
             remove
             and not changed_label
+            and torrent.id in can_remove
             and _check_torrent(
                 torrent, rules.get(torrent.tracker_alias, []), default_seed_time
             )
