@@ -13,6 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 from cyclopts import App, CycloptsError, Parameter
 from pydantic import BaseModel, ConfigDict
 from rich.console import Console
@@ -156,6 +157,7 @@ PARAM_HOST_ALIAS = Annotated[
     ),
 ]
 
+_DEFAULT_RULES = "https://gist.githubusercontent.com/AngellusMortis/a373832e26c753a5cea53507ddc14de1/raw/1f0e593ed33a452abf9e5091340ecdad08bb0ec9/rules.json"
 INVALID_FORMULA = "Invalid formula"
 INVALID_RESULT = "Formula result must be a timedelta"
 _AST_WHITELIST = (
@@ -249,75 +251,6 @@ def get_context() -> Context:
 
 
 DEFAULT_SEED_BUFFER = 1.1
-
-DEFAULT_RULES = [
-    TrackerRule(
-        host="avistaz.to",
-        priority=10,
-        min_time=timedelta(days=3),
-        min_formula="({min!r}+(timedelta(hours=2)*{size!r})) * {buffer}",
-    ),
-    TrackerRule(
-        host="blutopia.cc",
-        priority=10,
-        min_time=timedelta(days=10),
-        keep_size=10440,
-    ),
-    TrackerRule(
-        host="exoticaz.to",
-        priority=10,
-        min_time=timedelta(days=3),
-        min_formula="({min!r}+(timedelta(hours=2)*{size!r})) * {buffer}",
-    ),
-    TrackerRule(
-        host="flacsfor.me",
-        priority=10,
-        min_time=timedelta(days=7),
-    ),
-    TrackerRule(
-        host="landof.tv",
-        priority=1,
-        min_time=timedelta(days=1),
-        name_search=re.compile(r"(?i)S[0-9][0-9]E[0-9][0-9]"),
-    ),
-    TrackerRule(
-        host="landof.tv",
-        priority=10,
-        min_time=timedelta(days=5),
-    ),
-    TrackerRule(
-        host="myanonamouse.net",
-        priority=10,
-        min_time=timedelta(days=3),
-    ),
-    TrackerRule(
-        host="opsfet.ch",
-        priority=10,
-        min_time=timedelta(days=7),
-    ),
-    TrackerRule(
-        host="seedpool.org",
-        priority=10,
-        min_time=timedelta(days=10),
-    ),
-    TrackerRule(
-        host="torrentbytes.net",
-        priority=10,
-        min_time=timedelta(days=3),
-    ),
-    TrackerRule(
-        host="torrentleech.org",
-        priority=10,
-        min_time=timedelta(days=10),
-        keep_count=100,
-    ),
-    TrackerRule(
-        host="rptscene.xyz",
-        priority=10,
-        min_time=timedelta(days=1),
-    ),
-]
-
 DEFAULT_HOST_ALIAS = ["tleechreload.org=torrentleech.org"]
 
 
@@ -326,7 +259,8 @@ def _get_default_rules(ctx: Context) -> dict[str, list[TrackerRule]]:
 
     console = Console()
     _print(console, "Loading default rules...", quiet=ctx.quiet)
-    for rule in DEFAULT_RULES:
+    for rule_json in httpx.get(_DEFAULT_RULES).json():
+        rule = TrackerRule(**rule_json)
         tracker_rules = rules.get(rule.host, [])
         tracker_rules.append(rule)
         rules[rule.host] = tracker_rules
