@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import httpx
 from cyclopts import App, CycloptsError, Parameter
@@ -53,6 +53,7 @@ FLAG_DRY = Annotated[
 FLAG_REMOVE = Annotated[bool, Parameter(("--remove"), env_var="DELUGE_SYNC_REMOVE")]
 FLAG_MOVE = Annotated[bool, Parameter(("--move"), env_var="DELUGE_SYNC_MOVE")]
 FLAG_RELABEL = Annotated[bool, Parameter(("--relabel"), env_var="DELUGE_SYNC_RELABEL")]
+FLAG_NOTIFY = Annotated[bool, Parameter(("--notify"), env_var="DELUGE_SYNC_NOTIFY")]
 PARAM_URL = Annotated[
     str,
     Parameter(
@@ -191,6 +192,22 @@ def _parse(formula: str) -> timedelta:
     return result
 
 
+class Request(BaseModel):
+    """HTTP request model."""
+
+    url: str
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "POST"
+    headers: dict[str, str] = {}
+    data: str | None = None
+
+    def __str__(self) -> str:
+        """Str Request."""
+
+        if self.data:
+            return f"{self.method} {self.url} {self.data}"
+        return f"{self.method} {self.url}"
+
+
 class TrackerRule(BaseModel):
     """Tracker rules."""
 
@@ -203,6 +220,9 @@ class TrackerRule(BaseModel):
     name_search: re.Pattern[str] | None = None
     keep_count: int | None = None
     keep_size: int | None = None
+    seed_limit: int | None = None
+    under_limit_request: Request | None = None
+    over_limit_request: Request | None = None
 
     def required_seed_time(self, torrent: Torrent, buffer: float) -> timedelta:
         """Return required seed time combining min_time and min_formula."""
@@ -218,6 +238,30 @@ class TrackerRule(BaseModel):
         )
 
         return _parse(formula)
+
+    def _do_request(self, request: Request) -> None:
+        response = httpx.request(
+            request.method, request.url, headers=request.headers, content=request.data
+        )
+        response.raise_for_status()
+
+    def notify_under_limit(self, *, dry: bool = False) -> str | None:
+        """Send request if tracker is under limit."""
+
+        if self.under_limit_request:
+            if not dry:
+                self._do_request(self.under_limit_request)
+            return str(self.under_limit_request)
+        return None
+
+    def notify_over_limit(self, *, dry: bool = False) -> str | None:
+        """Send request if tracker is over limit."""
+
+        if self.over_limit_request:
+            if not dry:
+                self._do_request(self.over_limit_request)
+            return str(self.over_limit_request)
+        return None
 
 
 @dataclass
@@ -285,7 +329,7 @@ def _get_env_rules(ctx: Context) -> dict[str, list[TrackerRule]] | None:
     return rules
 
 
-def _compile_rules(ctx: Context, *, remove: bool) -> dict[str, list[TrackerRule]]:
+def _compile_rules(ctx: Context, *, remove: bool) -> dict[str, list[TrackerRule]]:  # noqa: C901
     rules = _get_env_rules(ctx) or _get_default_rules(ctx)
 
     for host, tracker_rules in rules.items():
@@ -295,9 +339,17 @@ def _compile_rules(ctx: Context, *, remove: bool) -> dict[str, list[TrackerRule]
 
         if len(sorted_rules) > 1:
             priority_zero_rule = sorted_rules[0].model_copy()
-            for rule in sorted_rules:
+            for rule in reversed(sorted_rules):
                 if rule.keep_count:
                     priority_zero_rule.keep_count = rule.keep_count
+                if rule.keep_size:
+                    priority_zero_rule.keep_size = rule.keep_size
+                if rule.seed_limit:
+                    priority_zero_rule.seed_limit = rule.seed_limit
+                if rule.under_limit_request:
+                    priority_zero_rule.under_limit_request = rule.under_limit_request
+                if rule.over_limit_request:
+                    priority_zero_rule.over_limit_request = rule.over_limit_request
             if priority_zero_rule.keep_count or priority_zero_rule.keep_size:
                 if priority_zero_rule.keep_count and priority_zero_rule.keep_size:
                     raise CycloptsError(msg=INVALID_KEEP)
@@ -338,11 +390,113 @@ def _get_under_size(
     return total_size, to_add
 
 
-def _filter_out_keep(
+def _filter_out_keep_count(
+    console: Console,
+    ctx: Context,
+    torrents: list[Torrent],
+    rule: TrackerRule,
+) -> list[Torrent]:
+    keep_count: int = rule.keep_count  # type: ignore[assignment]
+    count = len(torrents)
+    if count > keep_count:
+        _print(
+            console,
+            COUNT_OVER.format(
+                tracker=rule.host,
+                check=count - keep_count,
+                keep_count=keep_count,
+            ),
+            quiet=ctx.quiet,
+        )
+        return torrents[keep_count:]
+
+    _print(
+        console,
+        COUNT_UNDER.format(
+            tracker=rule.host,
+            count=count,
+            keep_count=keep_count,
+        ),
+        quiet=ctx.quiet,
+    )
+    return []
+
+
+def _filter_out_keep_size(
+    console: Console,
+    ctx: Context,
+    torrents: list[Torrent],
+    rule: TrackerRule,
+) -> list[Torrent]:
+    keep_size: int = rule.keep_size  # type: ignore[assignment]
+    total_size, to_add = _get_under_size(torrents, keep_size)
+    if to_add:
+        _print(
+            console,
+            SIZE_OVER.format(
+                tracker=rule.host,
+                total_size=total_size,
+                keep_size=keep_size,
+                to_add=len(to_add),
+            ),
+            quiet=ctx.quiet,
+        )
+        return to_add
+
+    _print(
+        console,
+        SIZE_UNDER.format(
+            tracker=rule.host,
+            total_size=total_size,
+            keep_size=keep_size,
+        ),
+        quiet=ctx.quiet,
+    )
+    return []
+
+
+def _check_limits(  # noqa: PLR0913
+    console: Console,
+    ctx: Context,
+    torrents: list[Torrent],
+    rule: TrackerRule,
+    buffer: float,
+    *,
+    notify: bool,
+    dry_run: bool,
+) -> None:
+    if not rule.seed_limit:
+        return
+
+    count_under = 0
+    for torrent in torrents:
+        if torrent.seeding_time < rule.required_seed_time(torrent, buffer):
+            count_under += 1
+
+    under_limit = count_under < rule.seed_limit
+    _print(
+        console,
+        f"{count_under} torrent(s) under min seed time (under: {under_limit})",
+        quiet=ctx.quiet,
+    )
+    if under_limit:
+        if notify and (req := rule.notify_under_limit(dry=dry_run)):
+            req = req.replace("{", "{{").replace("}", "}}")
+            _print(console, req, quiet=ctx.quiet)
+    elif notify and (req := rule.notify_over_limit(dry=dry_run)):
+        req = req.replace("{", "{{").replace("}", "}}")
+        _print(console, req, quiet=ctx.quiet)
+
+
+def _filter_out_keep(  # noqa: PLR0913
     console: Console,
     ctx: Context,
     torrents: Iterable[Torrent],
     rules: dict[str, list[TrackerRule]],
+    buffer: float,
+    *,
+    notify: bool = True,
+    dry_run: bool = False,
 ) -> set[str]:
     torrents_by_tracker = _torrents_by_tracker(torrents)
 
@@ -357,57 +511,23 @@ def _filter_out_keep(
             continue
 
         rule_zero = tracker_rules[0]
+        _check_limits(
+            console,
+            ctx,
+            sorted_torrents,
+            rule_zero,
+            buffer,
+            notify=notify,
+            dry_run=dry_run,
+        )
         if not rule_zero.keep_count and not rule_zero.keep_size:
             to_check += sorted_torrents
             continue
 
         if rule_zero.keep_count:
-            count = len(sorted_torrents)
-            if count < rule_zero.keep_count:
-                _print(
-                    console,
-                    COUNT_UNDER.format(
-                        tracker=rule_zero.host,
-                        count=count,
-                        keep_count=rule_zero.keep_count,
-                    ),
-                    quiet=ctx.quiet,
-                )
-            else:
-                _print(
-                    console,
-                    COUNT_OVER.format(
-                        tracker=rule_zero.host,
-                        check=count - rule_zero.keep_count,
-                        keep_count=rule_zero.keep_count,
-                    ),
-                    quiet=ctx.quiet,
-                )
-                to_check += sorted_torrents[rule_zero.keep_count :]
+            to_check += _filter_out_keep_count(console, ctx, sorted_torrents, rule_zero)
         elif rule_zero.keep_size:
-            total_size, to_add = _get_under_size(sorted_torrents, rule_zero.keep_size)
-            if to_add:
-                to_check += to_add
-                _print(
-                    console,
-                    SIZE_OVER.format(
-                        tracker=rule_zero.host,
-                        total_size=total_size,
-                        keep_size=rule_zero.keep_size,
-                        to_add=len(to_add),
-                    ),
-                    quiet=ctx.quiet,
-                )
-            else:
-                _print(
-                    console,
-                    SIZE_UNDER.format(
-                        tracker=rule_zero.host,
-                        total_size=total_size,
-                        keep_size=rule_zero.keep_size,
-                    ),
-                    quiet=ctx.quiet,
-                )
+            to_check += _filter_out_keep_size(console, ctx, sorted_torrents, rule_zero)
 
     return {t.id for t in to_check}
 
@@ -696,6 +816,7 @@ def sync(  # noqa: PLR0913
     remove: FLAG_REMOVE = True,
     move: FLAG_MOVE = True,
     relabel: FLAG_RELABEL = True,
+    notify: FLAG_NOTIFY = True,
     dry_run: FLAG_DRY = False,
 ) -> int:
     """
@@ -732,6 +853,9 @@ def sync(  # noqa: PLR0913
 
     relabel: bool
         Automatically relabel torrents for specific trackers to new label.
+
+    notify: bool
+        Send notify requests for over/under limit for trackers.
 
     dry_run: bool
         Do not actually delete any torrents.
@@ -773,7 +897,15 @@ def sync(  # noqa: PLR0913
 
     _print(console, f"{len(torrents)} torrent(s) to process", quiet=ctx.quiet)
 
-    can_remove = _filter_out_keep(console, ctx, torrents.values(), rules)
+    can_remove = _filter_out_keep(
+        console,
+        ctx,
+        torrents.values(),
+        rules,
+        seed_buffer,
+        dry_run=dry_run,
+        notify=notify,
+    )
     to_remove = []
     for torrent in torrents.values():
         changed_label = False
