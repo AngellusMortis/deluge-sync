@@ -106,7 +106,7 @@ The `seed_limit` rule can be combined with `under_limit_request` and `over_limit
 
 #### Example
 
-The following rule will disable an autobrr rule when the total number of seeding torrents with less then 3 days seeding time and disable it when over the limit.
+The following rule will enable an autobrr rule when the total number of seeding torrents with less then 3 days seeding time is under 100 and disable it when over the limit.
 
 rule:
 ```json
