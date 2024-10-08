@@ -66,6 +66,9 @@ Each rule is composed of
 * `name_search` -- regex to match the name of the torrent. Can be combined with `priority` to apply a different `min_time` based on the name
 * `keep_count` -- minimum number of total torrent for a tracker to keep before allowing removal, mutually exclusive with `keep_size`
 * `keep_size` -- minium amount of total size (in GiB) of torrents to keep for a tracker before allowing removal, mutually exclusive with `keep_size`
+* `seed_limit` -- total number of torrents that can be seeding at once under the `min_time` / `min_formula` limits
+* `under_limit_request` -- HTTP request to make if under `seed_limit`
+* `over_limit_request` -- HTTP request to make if over `seed_limit`
 
 These example rules will make sure
 
@@ -96,6 +99,36 @@ You can use `min_time` with `min_formula` to generate a formula for tracker trac
 ```
 
 Will seed the torrent for 3 days + 2 hours per GiB of the size of the torrent. All of that will be multipled by the seed buffer of 1.1.
+
+### Limits / autobrr
+
+The `seed_limit` rule can be combined with `under_limit_request` and `over_limit_request` to make automatic requests to autobrr or similar to enable/disabling filtering rules.
+
+#### Example
+
+The following rule will disable an autobrr rule when the total number of seeding torrents with less then 3 days seeding time and disable it when over the limit.
+
+rule:
+```json
+{
+    "host": "example.com",
+    "priority": 10,
+    "min_time": "P3D",
+    "seed_limit": 100,
+    "under_limit_request": {
+        "url": "http://autobrr:7474/api/filters/15/enabled",
+        "method": "PUT",
+        "headers": {"X-API-Token": "XXXXXXXXXX"},
+        "data": "{\"enabled\":true}"
+    },
+    "over_limit_request": {
+        "url": "http://autobrr:7474/api/filters/15/enabled",
+        "method": "PUT",
+        "headers": {"X-API-Token": "XXXXXXXXXX"},
+        "data": "{\"enabled\":false}"
+    }
+}
+```
 
 ## Setup
 
