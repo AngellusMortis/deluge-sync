@@ -48,7 +48,9 @@ The `sync` command is the meat of the script. It grabs a list of torrents using 
 Configurations options:
 
 * `-t`, `--seed-time` -- env: `DELUGE_SYNC_SEED_TIME` -- default: `1h 30m` -- Time to seed a torrent before removing it if it matches no other rules.
+* `--buffer-time` -- env: `DEFAULT_SYNC_SEED_BUFFER` -- default: `1.1` -- Multiplier to apply to min_time for tracker rules to add extra buffer time.
 * `-m`, `--path-map` -- env: `DELUGE_SYNC_PATH_MAP` -- List of rules to change the download paths per tracker. Format is `trackerhost=/download/path`, example: `example.com=/downloads/example`
+* `--host-alias` -- env: `DELUGE_SYNC_HOST_ALIAS_MAP` -- Map of tracker alias (key) to tracker (value). For trackers with multiple domain names.
 * env: `DELUGE_SYNC_RULES` -- Env only. A list of tracker rules for choosing when to remove a seeding torrent.
 
 #### Rules
@@ -60,7 +62,10 @@ Each rule is composed of
 * `host` -- required -- the tracker host to match on
 * `priority` -- required -- the rule priority. Lower numbered rules are applied first
 * `min_time` -- required -- the required seed time before the torrent can be removed
+* `min_formula` -- A formula to apply to calculate the seed time, more info below
 * `name_search` -- regex to match the name of the torrent. Can be combined with `priority` to apply a different `min_time` based on the name
+* `keep_count` -- minimum number of total torrent for a tracker to keep before allowing removal, mutually exclusive with `keep_size`
+* `keep_size` -- minium amount of total size (in GiB) of torrents to keep for a tracker before allowing removal, mutually exclusive with `keep_size`
 
 These example rules will make sure
 
@@ -71,6 +76,26 @@ These example rules will make sure
 ```json
 [{"host":"example.com","priority":10,"min_time":"24:00:00"},{"host":"example2.com","priority":1,"min_time":"24:00:00","name_search":"(?i)nightly"},{"host":"example2.com","priority":10,"min_time":"168:00:00"}]
 ```
+
+### Seed Time Formula
+
+You can use `min_time` with `min_formula` to generate a formula for tracker trackers that have a variable amount of seed time requirements. `min_formula` is expected to be a string that evaluates to a [Python timedelta](https://docs.python.org/3/library/datetime.html#timedelta-objects).
+
+#### Inputs
+
+* `{min}` -- timedelta -- The `min_time` for the give rule
+* `{size}` -- float -- the total size of all requested files in torrent as GiB
+* `{buffer}` -- float - the `--buffer-time` argument
+
+#### Example
+
+`min_time` = 3 days
+`seed_buffer` = 1.1
+```python
+({min}+(timedelta(hours=2)*{size})) * {buffer}
+```
+
+Will seed the torrent for 3 days + 2 hours per GiB of the size of the torrent. All of that will be multipled by the seed buffer of 1.1.
 
 ## Setup
 

@@ -1,5 +1,7 @@
 """Deluge Sync CLI."""
 
+import ast
+import datetime
 import json
 import os
 import re
@@ -12,7 +14,7 @@ from pathlib import Path
 from typing import Annotated
 
 from cyclopts import App, CycloptsError, Parameter
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from rich.console import Console
 from rich.table import Table
 
@@ -122,6 +124,14 @@ PARAM_DEFAULT_SEED = Annotated[
     ),
 ]
 
+PARAM_SEED_BUFFER = Annotated[
+    float,
+    Parameter(
+        ("--buffer-time"),
+        env_var="DEFAULT_SYNC_SEED_BUFFER",
+    ),
+]
+
 PARAM_PATH_MAP = Annotated[
     list[str] | None,
     Parameter(
@@ -146,16 +156,66 @@ PARAM_HOST_ALIAS = Annotated[
     ),
 ]
 
+INVALID_FORMULA = "Invalid formula"
+INVALID_RESULT = "Formula result must be a timedelta"
+_AST_WHITELIST = (
+    ast.Expression,
+    ast.Call,
+    ast.BinOp,
+    ast.Attribute,
+    ast.Name,
+    ast.Load,
+    ast.Constant,
+    ast.operator,
+    ast.keyword,
+)
+
+
+def _parse(formula: str) -> timedelta:
+    tree = ast.parse(formula, mode="eval")
+    valid = all(isinstance(node, _AST_WHITELIST) for node in ast.walk(tree))
+    if not valid:
+        raise CycloptsError(msg=INVALID_FORMULA)
+
+    result = eval(  # noqa: S307
+        compile(tree, filename="", mode="eval"),
+        {"__builtins__": None, "datetime": datetime, "timedelta": timedelta},
+        {},
+    )
+
+    if not isinstance(result, timedelta):
+        raise CycloptsError(msg=INVALID_RESULT)
+
+    return result
+
 
 class TrackerRule(BaseModel):
     """Tracker rules."""
 
+    model_config = ConfigDict(ser_json_timedelta="iso8601")
+
     host: str
     priority: int
     min_time: timedelta
+    min_formula: str | None = None
     name_search: re.Pattern[str] | None = None
     keep_count: int | None = None
     keep_size: int | None = None
+
+    def required_seed_time(self, torrent: Torrent, buffer: float) -> timedelta:
+        """Return required seed time combining min_time and min_formula."""
+
+        if self.min_formula is None:
+            return self.min_time * buffer
+
+        size = float(Decimal(torrent.total_wanted) / _GIBIBYTE)
+        formula = self.min_formula.format(
+            min=self.min_time,
+            size=size,
+            buffer=buffer,
+        )
+
+        return _parse(formula)
 
 
 @dataclass
@@ -188,7 +248,27 @@ def get_context() -> Context:
     return _STATE.context
 
 
+DEFAULT_SEED_BUFFER = 1.1
+
 DEFAULT_RULES = [
+    TrackerRule(
+        host="avistaz.to",
+        priority=10,
+        min_time=timedelta(days=3),
+        min_formula="({min!r}+(timedelta(hours=2)*{size!r})) * {buffer}",
+    ),
+    TrackerRule(
+        host="blutopia.cc",
+        priority=10,
+        min_time=timedelta(days=10),
+        keep_size=10440,
+    ),
+    TrackerRule(
+        host="exoticaz.to",
+        priority=10,
+        min_time=timedelta(days=3),
+        min_formula="({min!r}+(timedelta(hours=2)*{size!r})) * {buffer}",
+    ),
     TrackerRule(
         host="flacsfor.me",
         priority=10,
@@ -197,18 +277,28 @@ DEFAULT_RULES = [
     TrackerRule(
         host="landof.tv",
         priority=1,
-        min_time=timedelta(days=1, hours=2),
+        min_time=timedelta(days=1),
         name_search=re.compile(r"(?i)S[0-9][0-9]E[0-9][0-9]"),
     ),
     TrackerRule(
         host="landof.tv",
         priority=10,
-        min_time=timedelta(days=5, hours=12),
+        min_time=timedelta(days=5),
     ),
     TrackerRule(
         host="myanonamouse.net",
         priority=10,
-        min_time=timedelta(days=3, hours=12),
+        min_time=timedelta(days=3),
+    ),
+    TrackerRule(
+        host="opsfet.ch",
+        priority=10,
+        min_time=timedelta(days=7),
+    ),
+    TrackerRule(
+        host="seedpool.org",
+        priority=10,
+        min_time=timedelta(days=10),
     ),
     TrackerRule(
         host="torrentbytes.net",
@@ -216,21 +306,19 @@ DEFAULT_RULES = [
         min_time=timedelta(days=3),
     ),
     TrackerRule(
-        host="tleechreload.org",
-        priority=10,
-        min_time=timedelta(days=10, hours=12),
-    ),
-    TrackerRule(
         host="torrentleech.org",
         priority=10,
-        min_time=timedelta(days=10, hours=12),
+        min_time=timedelta(days=10),
+        keep_count=100,
     ),
     TrackerRule(
         host="rptscene.xyz",
         priority=10,
-        min_time=timedelta(days=1, hours=2),
+        min_time=timedelta(days=1),
     ),
 ]
+
+DEFAULT_HOST_ALIAS = ["tleechreload.org=torrentleech.org"]
 
 
 def _get_default_rules(ctx: Context) -> dict[str, list[TrackerRule]]:
@@ -268,7 +356,7 @@ def _compile_rules(ctx: Context, *, remove: bool) -> dict[str, list[TrackerRule]
 
     for host, tracker_rules in rules.items():
         sorted_rules = sorted(tracker_rules, key=lambda r: r.priority)
-        if sorted_rules and sorted_rules[0].priority <= 1:
+        if sorted_rules and sorted_rules[0].priority < 1:
             raise CycloptsError(msg=INVALID_PRIORITY)
 
         if len(sorted_rules) > 1:
@@ -394,6 +482,7 @@ def _check_torrent(
     torrent: Torrent,
     rules: list[TrackerRule],
     default_seed_time: timedelta,
+    buffer: float,
 ) -> bool:
     if not rules:
         return torrent.seeding_time > default_seed_time
@@ -403,7 +492,7 @@ def _check_torrent(
         if rule.name_search and not rule.name_search.search(torrent.name):
             continue
 
-        if torrent.seeding_time > rule.min_time:
+        if torrent.seeding_time > rule.required_seed_time(torrent, buffer):
             return True
 
     return False
@@ -460,6 +549,8 @@ def main(  # noqa: PLR0913
     )
     console = Console(soft_wrap=False)
 
+    if tokens and tokens[0] == "rules":
+        quiet = True
     try:
         _print(
             console,
@@ -630,11 +721,41 @@ def _remove_torrents(
 
 
 @app.command()
+def rules() -> int:
+    """
+    Dump sync rules.
+
+    Returns json of the currently configured rules for the sync command.
+    """
+
+    ctx = get_context()
+    console = Console()
+    dump_rules = []
+    rules = _get_env_rules(ctx) or _get_default_rules(ctx)
+    for tracker_rules in rules.values():
+        for tracker_rule in tracker_rules:
+            rule = json.loads(tracker_rule.model_dump_json())
+            if rule["min_formula"] is None:
+                del rule["min_formula"]
+            if rule["name_search"] is None:
+                del rule["name_search"]
+            if rule["keep_count"] is None:
+                del rule["keep_count"]
+            if rule["keep_size"] is None:
+                del rule["keep_size"]
+            dump_rules.append(rule)
+
+    console.print_json(json.dumps(dump_rules))
+    return 0
+
+
+@app.command()
 def sync(  # noqa: PLR0913
     *,
     labels: PARAM_LABELS = None,
     exclude_labels: PARAM_EXCLUDE_LABELS = None,
     default_seed_time: PARAM_DEFAULT_SEED = timedelta(minutes=90),
+    seed_buffer: PARAM_SEED_BUFFER = DEFAULT_SEED_BUFFER,
     path_list: PARAM_PATH_MAP = None,
     label_remap_list: PARAM_LABEL_REMAP = None,
     host_aliases_list: PARAM_HOST_ALIAS = None,
@@ -656,6 +777,9 @@ def sync(  # noqa: PLR0913
 
     default_seed_time: timedelta
         Default seedtime for torrents without rules.
+
+    seed_buffer: float
+        Multiplier to apply to min_time for tracker rules to add extra buffer time.
 
     path_list: list[str]
         Map of tracker (key) to download folder (value). Will move to path.
@@ -690,10 +814,15 @@ def sync(  # noqa: PLR0913
     rules = _compile_rules(ctx, remove=remove)
     path_map = _convert_to_dict_path(path_list or [])
     label_remap = _convert_to_dict(label_remap_list or [])
-    host_aliases = _convert_to_dict(host_aliases_list or [])
+    host_aliases = _convert_to_dict(host_aliases_list or DEFAULT_HOST_ALIAS)
     _print(
         console,
         f"Loaded path maps for {len(path_map)} trackers (move: {move})",
+        quiet=ctx.quiet,
+    )
+    _print(
+        console,
+        f"Loaded alias maps for {len(host_aliases)} trackers",
         quiet=ctx.quiet,
     )
 
@@ -737,7 +866,10 @@ def sync(  # noqa: PLR0913
             and not changed_label
             and torrent.id in can_remove
             and _check_torrent(
-                torrent, rules.get(torrent.tracker_alias, []), default_seed_time
+                torrent,
+                rules.get(torrent.tracker_alias, []),
+                default_seed_time,
+                seed_buffer,
             )
         ):
             to_remove.append(torrent.id)
