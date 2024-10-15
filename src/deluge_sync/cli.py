@@ -476,7 +476,10 @@ def _check_limits(  # noqa: PLR0913
     under_limit = count_under < rule.seed_limit
     _print(
         console,
-        f"{count_under} torrent(s) under min seed time (under: {under_limit})",
+        (
+            f"Tracker ({rule.host}) {count_under} torrent(s) under min seed "
+            f"time (under: {under_limit}, notify: {notify})"
+        ),
         quiet=ctx.quiet,
     )
     if under_limit:
